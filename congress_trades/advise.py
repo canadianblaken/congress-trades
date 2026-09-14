@@ -42,6 +42,9 @@ across trades is not a portfolio return.
 - Many disclosures are spouse-directed or index funds, and the filer may not have \
 chosen the trade at all.
 - You have no data after the digest's date, and no prices beyond what is shown.
+- The digest reports a persistence figure: the rank correlation between members' first-half and second-half alpha. When it is near zero, a member's past record does NOT predict their next trade, and you must not present the ranking as a list of people to follow. Say what it is: history.
+- A member whose scored trades concentrate in one ticker has one bet, not a record, however large their alpha. Check the top-name share before citing anyone.
+- `congress-trades backtest` is the out-of-sample test. If its intervals span zero, no strategy has been shown to beat the index, and any recommendation you make must carry that.
 
 Write for a reader deciding whether any of this is actionable:
 1. What changed since the previous digest, if one is given.

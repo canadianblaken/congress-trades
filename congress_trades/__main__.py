@@ -12,7 +12,7 @@ import json
 import logging
 import sys
 
-from . import advise, digest, pipeline, prices, scorecard
+from . import advise, backtest, digest, pipeline, prices, scorecard
 from .config import CONFIG
 from .publish import render
 
@@ -78,6 +78,14 @@ def main(argv=None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
+    p = sub.add_parser("backtest", help="would following the disclosures have paid?")
+    p.add_argument("--split", default=backtest.SPLIT,
+                   help="members are ranked before this date, graded after it")
+    p.add_argument("--horizon", choices=("30", "90"), default="90")
+    p.add_argument("--floor", type=int, default=0)
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
     p = sub.add_parser("advise", help="send the digest to any OpenAI-compatible LLM")
     p.add_argument("--days", type=int, default=90)
     p.add_argument("--floor", type=int, default=CONFIG.default_floor)
@@ -128,6 +136,16 @@ def main(argv=None) -> int:
             print(json.dumps(rows[:args.limit] if args.limit else rows, indent=2))
         else:
             sys.stdout.write(scorecard.to_markdown(rows, args.horizon, args.limit))
+        return 0
+    if args.cmd == "backtest":
+        if args.selftest:
+            backtest.selftest(CONFIG)
+            return 0
+        d = backtest.run(args.split, args.horizon, args.floor, cfg=CONFIG)
+        if args.json:
+            print(json.dumps(d, indent=2))
+        else:
+            sys.stdout.write(backtest.to_markdown(d))
         return 0
     if args.cmd == "advise":
         return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)

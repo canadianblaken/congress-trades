@@ -137,7 +137,8 @@ def build(days=90, floor=15001, cfg=CONFIG) -> dict:
         "sectors": sector_flow(rows, sectors),
         "lone_large": lone_large(rows),
         "committee_overlap": committee_overlap(rows, members, seats, sectors),
-        "scorecard": scorecard.members(floor, "90", cfg=cfg)[:15],
+        "scorecard": (sc := scorecard.members(floor, "90", cfg=cfg))[:15],
+        "persistence": scorecard.persistence(sc),
         "_sectors_by_ticker": {t: (v.get("sector") or "?") for t, v in sectors.items()},
     }
 
@@ -192,14 +193,38 @@ def to_markdown(d: dict) -> str:
                  f"| {money(r['amount_min'])} | {r['disclosed']} |")
 
     L += ["", "## Scorecard — best and worst records, 90d alpha vs SPY, all history",
-          "| member | scored | median alpha | beat index | buys | sells |",
-          "|---|--:|--:|--:|--:|--:|"]
+          "| member | scored | median alpha | beat index | buys | sells "
+          "| 1st half → 2nd | top name |",
+          "|---|--:|--:|--:|--:|--:|--:|--:|"]
     for o in d["scorecard"]:
+        sp, c = o["split"], o["conc"]
         L.append(f"| {o['member']} | {o['overall']['n']} | {pct(o['overall']['med'])} "
                  f"| {scorecard.rate(o['overall']['beat'])} "
-                 f"| {pct(o['buys']['med'])} | {pct(o['sells']['med'])} |")
-    L.append("")
-    L.append("Full ranking and per-member best/worst calls: `congress-trades scorecard`.")
+                 f"| {pct(o['buys']['med'])} | {pct(o['sells']['med'])} "
+                 f"| {pct(sp['first']['med'])} → {pct(sp['second']['med'])} "
+                 f"| {c['top']} {scorecard.rate(c['share'])} |")
+
+    ps = d["persistence"]
+    L += ["",
+          "### Does past alpha predict future alpha?", ""]
+    if ps["r"] is None:
+        L.append("Not enough members with two scoreable halves to say.")
+    else:
+        L += [f"Across {ps['n']} members, the rank correlation between a member's "
+              f"first-half and second-half alpha is **r = {ps['r']:+.2f}**, and "
+              f"{ps['same_sign']*100:.0f}% keep the same sign.",
+              "",
+              ("**Treat the ranking above as history, not as a tip sheet.** A "
+               "correlation this close to zero means a member's past alpha carries "
+               "essentially no information about their next trade, and the top of "
+               "the table is mostly whoever got lucky in a concentrated position — "
+               "check the 'top name' column."
+               if abs(ps["r"]) < 0.25 else
+               "Past alpha shows some persistence here, which is worth a look but "
+               "is still a single sample over overlapping windows.")]
+    L += ["",
+          "Full ranking, per-member best/worst calls and the out-of-sample test: "
+          "`congress-trades scorecard` and `congress-trades backtest`."]
     return "\n".join(L) + "\n"
 
 
@@ -215,7 +240,8 @@ def selftest(cfg=CONFIG):
         or abs(scored_alpha({"tx_type": "sell", "ret_90": -0.1, "bench_90": 0.05}) - 0.15) < 1e-9
     assert scored_alpha({"tx_type": "sell", "ret_90": None, "bench_90": 0.05}) is None
     txt = to_markdown(build(90, cfg=cfg))
-    for head in ("Convergence", "Committee overlap", "Scorecard"):
+    for head in ("Convergence", "Committee overlap", "Scorecard",
+                 "predict future alpha"):
         assert head in txt, head
     scored = sum(1 for r in rows if scored_alpha(r) is not None)
     print(f"selftest ok: {len(rows)} rows, {len(conv)} convergence names, "

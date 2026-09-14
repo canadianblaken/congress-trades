@@ -25,7 +25,8 @@ one page you can open in a browser:
   and the *lone large positions* a single member took that nobody else touched.
 - **Scoreboard view** — every member ranked by how their disclosed trades actually
   turned out against the index, buys and sells both, with their best and worst call
-  spelled out.
+  spelled out, each record split into halves, and a warning on any member whose
+  alpha is really one concentrated bet.
 - **Filters** — chamber, time window, and a disclosure-size floor, applied live.
 
 Everything is inlined into the output file. There is no server and no API.
@@ -101,6 +102,7 @@ python -m congress_trades prices                # forward returns per disclosure
 python -m congress_trades publish               # render the page
 python -m congress_trades digest                # prompt-sized brief of the trends
 python -m congress_trades scorecard             # rank members by record vs the index
+python -m congress_trades backtest              # would following them have paid?
 python -m congress_trades advise                # send that brief to an LLM
 ```
 
@@ -153,6 +155,52 @@ What the ranking still cannot tell you, even benchmarked: windows overlap, the
 set is dominated by a few prolific filers, amounts are brackets, and a median
 across trades is not a portfolio return. `MIN_TRADES` is enforced because below
 about ten measurable trades a "record" is one lucky quarter.
+
+## Does any of it work?
+
+Three checks, because a ranking that cannot be falsified is a horoscope.
+
+```bash
+python -m congress_trades scorecard        # includes the halves + persistence r
+python -m congress_trades backtest         # out-of-sample, with error bars
+python -m congress_trades backtest --split 2025-10-01   # try another cut
+```
+
+**1. Split each record in half.** Every member is scored on the older half of their
+own history and the newer half separately. The scoreboard shows both.
+
+**2. Ask whether the halves agree.** Across members, the rank correlation between
+first-half and second-half alpha is the single most useful number this project
+produces. On the data as collected it comes out around **r = +0.03** with 55% of
+members keeping the same sign — meaning a member's past alpha says essentially
+nothing about their next trade, and the top of the ranking is mostly whoever got
+lucky. The page says so above the table rather than in a footnote.
+
+**3. Concentration.** The member at the top of the alpha ranking had 89% of their
+scored trades in a single bitcoin ETF. That is one bet with a sample size of one,
+not a 27-trade record, so any member whose top ticker exceeds half their trades is
+flagged as **one bet** on the scoreboard.
+
+### The backtest
+
+`backtest` ranks members using disclosures *before* a cut date and grades them only
+on disclosures *after* it, so selection never sees the period being measured —
+which is the exact error checks 1 and 2 exist to catch. Positions are equal-weight,
+held 90 days from the disclosure date, scored as alpha vs SPY.
+
+It reports a 90% bootstrap interval on every strategy, and that matters more than
+the point estimate: "top members" can show a mean of +3.3% on 42 positions with an
+interval of −2.4% to +8.8%, which is not a result. On the data as collected, **no
+strategy tested has an interval that misses zero**, at either split date — not
+member selection, not buys, not sells-as-shorts. The `bottom N members` row is the
+control: if the ranking carried information, it would be reliably worse.
+
+Caveats the code states rather than hides: a sell is only actionable as a short and
+shorting is not frictionless (no borrow costs or availability modelled, so those
+rows are an upper bound); the reported figure is average position alpha, not a
+compounded equity curve; and the default `CONGRESS_YEARS` leaves only ~18 months of
+disclosures with a closed 90-day window, which is one split rather than a proper
+walk-forward. Collect more years before reading much into any of it.
 
 ## Feeding it to an AI
 
@@ -279,7 +327,8 @@ and committee service or a well-timed trade is not evidence of wrongdoing.
 python3 tests/test_parsers.py
 python3 tests/test_config_and_sectors.py
 python -m congress_trades digest --selftest      # aggregate invariants
-python -m congress_trades scorecard --selftest   # alpha signs, ranking, min sample
+python -m congress_trades scorecard --selftest   # alpha signs, ranking, concentration
+python -m congress_trades backtest --selftest    # no-lookahead + CI sanity
 ```
 
 The parser tests are the ones that matter: they run against real filing layouts, and

@@ -96,6 +96,8 @@ def scorecard_payload(cfg) -> list[dict]:
             "best": scorecard.describe(m["best"], m["best"]["alpha"]) if m["best"] else "",
             "worst": (scorecard.describe(m["worst"], m["worst"]["alpha"])
                       if m["worst"] and m["worst"] is not m["best"] else ""),
+            "h1": m["split"]["first"]["med"], "h2": m["split"]["second"]["med"],
+            "ct": m["conc"]["top"], "cs": m["conc"]["share"],
         })
     return out
 
@@ -105,6 +107,8 @@ def render(cfg=CONFIG) -> int:
         payload = build_payload(conn)
     payload["scorecard"] = scorecard_payload(cfg)
     payload["scoreMin"] = scorecard.MIN_TRADES
+    payload["persistence"] = scorecard.persistence(
+        scorecard.members(cfg.default_floor, "90", cfg=cfg))
     rows = payload["rows"]
     if not rows:
         print("no congress trades in db; run congress_backfill.py first")
@@ -723,6 +727,7 @@ function loneLargePositions(minAmount = 100001, limit = 15) {
    would rank members by which quarter you happened to be looking at. Chamber
    filters, since that one cannot change a member's own numbers.             */
 const SCORE = DATA.scorecard || [];
+const PERSIST = DATA.persistence || {};
 let scoreSort = "med";
 
 function renderScore() {
@@ -741,11 +746,24 @@ function renderScore() {
        }${(x*100).toFixed(1)}%</span>`;
   const r0 = x => x == null ? "—" : Math.round(x*100) + "%";
   const head = [["med","Median alpha"],["beat","Beat index"],
-                ["bmed","Buys"],["smed","Sells"],["omed","Open now"]];
+                ["bmed","Buys"],["smed","Sells"],["h2","2nd half"],
+                ["omed","Open now"]];
 
   el.innerHTML = `
     <div class="panel">
       <h3>Member scoreboard</h3>
+      ${PERSIST.r == null ? "" : `<p style="border-left:3px solid var(--${
+        Math.abs(PERSIST.r) < 0.25 ? "sell" : "line-2"}); padding:.5rem .8rem;
+        margin:0 0 1rem; background:var(--bg); font-size:13px">
+        <b>Past alpha vs future alpha: r = ${PERSIST.r >= 0 ? "+" : ""}${
+          PERSIST.r.toFixed(2)}</b> across ${PERSIST.n} members,
+        ${Math.round(PERSIST.same_sign*100)}% keeping the same sign.
+        ${Math.abs(PERSIST.r) < 0.25
+          ? `Near zero &mdash; a member's record says almost nothing about their next
+             trade. Read this table as history, not as a tip sheet, and check the
+             <b>top name</b> column before believing any row: a high share means the
+             whole record is one bet.`
+          : `Some persistence, though still one sample over overlapping windows.`}</p>`}
       <p class="hint">Excess return over SPY across the same 90-day window, measured
         from the <b>disclosure</b> date. A buy scores stock minus index; a sell scores
         index minus stock, so exiting a name that then lagged the market counts as a
@@ -762,6 +780,9 @@ function renderScore() {
         <tbody>${rows.map((r, i) => `<tr>
           <td class="num">${i+1}</td>
           <td><b>${esc(r.n)}</b> <span style="color:var(--ink-3)">${esc(r.c[0] || "")}</span>
+            ${r.cs != null && r.cs >= 0.5 ? `<div style="color:var(--sell); font-size:11.5px;
+              margin:.15rem 0 0">one bet: ${Math.round(r.cs*100)}% of scored trades are
+              ${esc(r.ct)}</div>` : ""}
             ${r.best ? `<div class="hint" style="margin:.15rem 0 0">${esc(r.best)}</div>` : ""}
             ${r.worst ? `<div class="hint" style="margin:.1rem 0 0; opacity:.75">${esc(r.worst)}</div>` : ""}
           </td>
@@ -770,6 +791,7 @@ function renderScore() {
           <td class="num">${r0(r.beat)}</td>
           <td class="num">${p(r.bmed)} <span style="color:var(--ink-3)">(${r.bn})</span></td>
           <td class="num">${p(r.smed)} <span style="color:var(--ink-3)">(${r.sn})</span></td>
+          <td class="num">${p(r.h1)} <span style="color:var(--ink-3)">&rarr;</span> ${p(r.h2)}</td>
           <td class="num">${p(r.omed)} <span style="color:var(--ink-3)">(${r.on})</span></td>
         </tr>`).join("")}</tbody>
       </table></div>
