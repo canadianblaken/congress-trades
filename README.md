@@ -66,9 +66,28 @@ python -m congress_trades all
 open out/congress.html
 ```
 
-The first run collects a couple of years of filings and takes a few minutes, mostly
-fetching PDFs. Filings are immutable, so they are cached and never fetched twice —
-later runs take seconds.
+### The first run is slow. Budget for it.
+
+A fresh clone ships with **no data** — the database, the cached filings and the
+rendered page are all gitignored, because they are rebuildable and large. So the
+first run does real work:
+
+| Step | Roughly | Why |
+|---|---|---|
+| `backfill` | a few minutes | one ZIP per year from the House Clerk, then a PDF per filing |
+| `enrich` | a minute or two | roster, then one Wikipedia lookup per member |
+| `sectors` | under a minute | SEC EDGAR, one lookup per unseen ticker |
+| `prices` | **10–20 minutes** | one price series per ticker, ~1,300 of them, deliberately rate-limited |
+
+`prices` is the long one — expect the cold `all` above to take 15-25 minutes — and
+the scorecard and every return in the digest stay **empty until it finishes**.
+Nothing is broken at that point; there is simply nothing to score yet.
+
+It is a one-time cost. Filings are immutable and are never fetched twice, and each
+price series is cached as it arrives and re-read once a day at most, so later runs
+take seconds. Interrupting `prices` loses no downloads for the same reason — but
+it does write no rows, since the whole pass commits as one transaction. Re-run it
+and it replays from the cache in a fraction of the time.
 
 Individual steps:
 
