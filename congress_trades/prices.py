@@ -25,6 +25,7 @@ from . import db
 from .config import CONFIG, user_agent
 
 CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
+BENCHMARK = "SPY"             # what the money would have done sitting in the market
 CACHE_TTL = 20 * 3600          # a trading day; closes never change retroactively
 PAUSE = 0.25                   # Yahoo starts 429ing a few requests per second
 
@@ -79,15 +80,23 @@ def _close_at_or_after(s: dict[str, float], day: str, window: int = 7):
 
 def compute(cfg=CONFIG, limit: int = 0, quiet: bool = False) -> int:
     """Fill trade_returns for every tickered disclosure. Re-runnable: rows whose
-    90-day window has closed are final and are skipped on later runs."""
+    90-day window has closed are final and are skipped on later runs.
+
+    Every row also stores the benchmark over the identical window, because a
+    return without one is unreadable: +6% on a 90-day window when the market did
+    +7% is a loss, and every member looks like a genius in a bull market."""
     today = dt.date.today()
+    bench = series(BENCHMARK, cfg)
+    if not bench:
+        print(f"warning: no {BENCHMARK} series; returns will have no benchmark")
     with db.connect(cfg.db_path) as conn:
         rows = conn.execute(
             """SELECT t.id, t.ticker, COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0
                  FROM congress_trades t
                  LEFT JOIN trade_returns r ON r.trade_id = t.id
                 WHERE t.ticker != '' AND d0 != ''
-                  AND (r.trade_id IS NULL OR r.ret_90 IS NULL)
+                  AND (r.trade_id IS NULL OR r.ret_90 IS NULL
+                       OR (r.bench_90 IS NULL AND r.ret_90 IS NOT NULL))
                 ORDER BY d0 DESC""").fetchall()
         if limit:
             rows = rows[:limit]
@@ -117,15 +126,31 @@ def compute(cfg=CONFIG, limit: int = 0, quiet: bool = False) -> int:
                     p30 = None
                 if p90 and d0 + dt.timedelta(days=90) > today:
                     p90 = None
+                # The benchmark is read at the same dates, not the same offsets,
+                # so a holiday or a weekend shifts both legs together.
+                b0 = _close_at_or_after(bench, t["d0"]) if bench else None
+                b30 = b90 = b_now = None
+                if b0:
+                    if p30:
+                        bx = _close_at_or_after(
+                            bench, (d0 + dt.timedelta(days=30)).isoformat())
+                        b30 = (bx / b0 - 1) if bx else None
+                    if p90:
+                        bx = _close_at_or_after(
+                            bench, (d0 + dt.timedelta(days=90)).isoformat())
+                        b90 = (bx / b0 - 1) if bx else None
+                    b_now = bench[max(bench)] / b0 - 1
                 conn.execute(
                     """INSERT OR REPLACE INTO trade_returns
                        (trade_id, px_0, px_30, px_90, px_now,
-                        ret_30, ret_90, ret_now, updated_at)
-                       VALUES(?,?,?,?,?,?,?,?,?)""",
+                        ret_30, ret_90, ret_now, bench_30, bench_90, bench_now,
+                        updated_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (t["id"], p0, p30, p90, px_now,
                      (p30 / p0 - 1) if p30 else None,
                      (p90 / p0 - 1) if p90 else None,
                      (px_now / p0 - 1),
+                     b30, b90, b_now,
                      db.utcnow()))
                 done += 1
             if not quiet and i % 25 == 0:

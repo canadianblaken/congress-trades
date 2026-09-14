@@ -17,10 +17,8 @@ import datetime as dt
 import statistics
 from collections import defaultdict
 
-from . import db, legislators
+from . import db, legislators, scorecard
 from .config import CONFIG
-
-HORIZON = "ret_90"          # the closed window the track record is scored on
 
 
 def load(days: int, floor: int, cfg=CONFIG):
@@ -31,28 +29,22 @@ def load(days: int, floor: int, cfg=CONFIG):
         sectors = {r["ticker"]: dict(r) for r in
                    conn.execute("SELECT * FROM ticker_sectors")}
         rows = [dict(r) for r in conn.execute(
-            """SELECT t.*, r.ret_30, r.ret_90, r.ret_now
+            """SELECT t.*, r.ret_30, r.ret_90, r.ret_now,
+                        r.bench_30, r.bench_90, r.bench_now
                  FROM congress_trades t
                  LEFT JOIN trade_returns r ON r.trade_id = t.id
                 WHERE t.ticker != '' AND t.amount_min >= ?
                   AND COALESCE(NULLIF(t.disclosed,''), t.tx_date) >= ?""",
             (floor, since))]
-        # The track record must span every closed window, not just this window.
-        scored = [dict(r) for r in conn.execute(
-            f"""SELECT t.member, t.tx_type, r.{HORIZON} AS ret
-                  FROM congress_trades t
-                  JOIN trade_returns r ON r.trade_id = t.id
-                 WHERE t.ticker != '' AND t.amount_min >= ?
-                   AND r.{HORIZON} IS NOT NULL""", (floor,))]
-    return rows, members, seats, sectors, scored, since
+    return rows, members, seats, sectors, since
 
 
-def directional(tx_type: str, ret: float | None) -> float | None:
-    """A sell that preceded a fall was a good call, so score every trade in the
-    direction the member took rather than in raw price terms."""
-    if ret is None:
-        return None
-    return -ret if tx_type == "sell" else ret
+def scored_alpha(r: dict, horizon: str = "90") -> float | None:
+    """Excess return in the direction the member took, over SPY across the same
+    window. Deliberately the scorecard's definition -- two answers to "did this
+    trade work" would be one too many."""
+    return scorecard.alpha(r["tx_type"], r.get(f"ret_{horizon}"),
+                           r.get(f"bench_{horizon}"))
 
 
 def convergence(rows, limit=20):
@@ -63,7 +55,7 @@ def convergence(rows, limit=20):
         o["buys" if r["tx_type"] == "buy" else "sells"] += 1
         o["members"].add(r["member"])
         o["max"] = max(o["max"], r["amount_min"] or 0)
-        d = directional(r["tx_type"], r.get("ret_90"))
+        d = scored_alpha(r)
         if d is not None:
             o["rets"].append(d)
     out = [{"t": t, "n": len(o["members"]), "net": o["buys"] - o["sells"],
@@ -125,23 +117,6 @@ def committee_overlap(rows, members, seats, sectors, limit=20):
     return out[:limit]
 
 
-def track_record(scored, min_trades=20, limit=15):
-    """Per member: share of closed 90-day windows that moved the way they traded.
-    Small samples are noise, so members under min_trades are dropped rather than
-    shown with a flattering 100%."""
-    by = defaultdict(list)
-    for r in scored:
-        d = directional(r["tx_type"], r["ret"])
-        if d is not None:
-            by[r["member"]].append(d)
-    out = [{"member": m, "n": len(v),
-            "hit": sum(1 for x in v if x > 0) / len(v),
-            "med": statistics.median(v)}
-           for m, v in by.items() if len(v) >= min_trades]
-    out.sort(key=lambda o: (-o["hit"], -o["med"]))
-    return out[:limit]
-
-
 def money(n):
     n = n or 0
     return f"${n/1e6:.1f}M" if n >= 1e6 else f"${round(n/1e3)}k" if n >= 1e3 else f"${n}"
@@ -152,7 +127,7 @@ def pct(x):
 
 
 def build(days=90, floor=15001, cfg=CONFIG) -> dict:
-    rows, members, seats, sectors, scored, since = load(days, floor, cfg)
+    rows, members, seats, sectors, since = load(days, floor, cfg)
     return {
         "since": since, "days": days, "floor": floor,
         "disclosures": len(rows),
@@ -162,7 +137,7 @@ def build(days=90, floor=15001, cfg=CONFIG) -> dict:
         "sectors": sector_flow(rows, sectors),
         "lone_large": lone_large(rows),
         "committee_overlap": committee_overlap(rows, members, seats, sectors),
-        "track_record": track_record(scored),
+        "scorecard": scorecard.members(floor, "90", cfg=cfg)[:15],
         "_sectors_by_ticker": {t: (v.get("sector") or "?") for t, v in sectors.items()},
     }
 
@@ -177,9 +152,13 @@ def to_markdown(d: dict) -> str:
          "- Filings lag the actual trade by up to 45 days. Every price here is measured",
          "  from the DISCLOSURE date, i.e. what a reader could actually have acted on.",
          "- Amounts are the brackets members report, not real position sizes.",
-         "- Returns are directional: a sell scores positive when the price then fell.",
-         "- Nothing here is adjusted for the market's own move over the same window,",
-         "  so a high hit rate in a rising market is not skill.", ""]
+         "- Every return shown is ALPHA: excess over SPY across the identical window,",
+         "  in the direction the member took. A buy scores stock minus index; a sell",
+         "  scores index minus stock, so exiting a name that then lagged the market",
+         "  counts as a win. +0% means the member merely matched the index.",
+         "- Alpha still is not skill: windows overlap, the set is dominated by a few",
+         "  prolific filers, and a median across trades is not a portfolio return.",
+         "- Many disclosures are spouse-directed or index funds the filer never chose.", ""]
 
     L += ["## Convergence — most distinct members on one name",
           "| ticker | members | net | largest | sector | median 90d |",
@@ -195,13 +174,13 @@ def to_markdown(d: dict) -> str:
                  f"| {len(o['tickers'])} |")
 
     L += ["", "## Lone large positions — one member, nobody else",
-          "| ticker | member | type | amount | × their median | disclosed | 90d |",
+          "| ticker | member | type | amount | × their median | disclosed | 90d α |",
           "|---|---|---|--:|--:|---|--:|"]
     for o in d["lone_large"]:
         r = o["r"]
         L.append(f"| {o['t']} | {r['member']} | {r['tx_type']} | {money(r['amount_min'])} "
                  f"| {o['mult']:.0f}× | {r['disclosed']} "
-                 f"| {pct(directional(r['tx_type'], r.get('ret_90')))} |")
+                 f"| {pct(scored_alpha(r))} |")
 
     L += ["", f"## Committee overlap — traded a sector their committee oversees "
               f"({len(d['committee_overlap'])} shown)",
@@ -212,26 +191,32 @@ def to_markdown(d: dict) -> str:
         L.append(f"| {r['member']} | {r['ticker']} | {o['sector']} | {r['tx_type']} "
                  f"| {money(r['amount_min'])} | {r['disclosed']} |")
 
-    L += ["", "## Track record — closed 90-day windows, all history, min 20 trades",
-          "| member | trades | went their way | median |", "|---|--:|--:|--:|"]
-    for o in d["track_record"]:
-        L.append(f"| {o['member']} | {o['n']} | {o['hit']*100:.0f}% | {pct(o['med'])} |")
+    L += ["", "## Scorecard — best and worst records, 90d alpha vs SPY, all history",
+          "| member | scored | median alpha | beat index | buys | sells |",
+          "|---|--:|--:|--:|--:|--:|"]
+    for o in d["scorecard"]:
+        L.append(f"| {o['member']} | {o['overall']['n']} | {pct(o['overall']['med'])} "
+                 f"| {scorecard.rate(o['overall']['beat'])} "
+                 f"| {pct(o['buys']['med'])} | {pct(o['sells']['med'])} |")
+    L.append("")
+    L.append("Full ranking and per-member best/worst calls: `congress-trades scorecard`.")
     return "\n".join(L) + "\n"
 
 
 def selftest(cfg=CONFIG):
-    rows, members, seats, sectors, scored, _ = load(3650, 1, cfg)
+    rows, members, seats, sectors, _ = load(3650, 1, cfg)
     assert rows, "no rows loaded from congress.db"
     conv = convergence(rows)
     assert [o["n"] for o in conv] == sorted((o["n"] for o in conv), reverse=True), \
         "convergence not ranked by distinct member count"
     assert all(len(o["members"]) == o["n"] for o in conv), "member count mismatch"
     assert all(o["r"]["ticker"] == o["t"] for o in lone_large(rows))
-    assert directional("sell", -0.1) == 0.1 and directional("buy", -0.1) == -0.1
-    assert directional("sell", None) is None
-    assert all(0 <= o["hit"] <= 1 and o["n"] >= 20 for o in track_record(scored))
+    assert scored_alpha({"tx_type": "sell", "ret_90": -0.1, "bench_90": 0.05}) == 0.15000000000000002 \
+        or abs(scored_alpha({"tx_type": "sell", "ret_90": -0.1, "bench_90": 0.05}) - 0.15) < 1e-9
+    assert scored_alpha({"tx_type": "sell", "ret_90": None, "bench_90": 0.05}) is None
     txt = to_markdown(build(90, cfg=cfg))
-    for head in ("Convergence", "Committee overlap", "Track record"):
+    for head in ("Convergence", "Committee overlap", "Scorecard"):
         assert head in txt, head
+    scored = sum(1 for r in rows if scored_alpha(r) is not None)
     print(f"selftest ok: {len(rows)} rows, {len(conv)} convergence names, "
-          f"{len(scored)} scored trades")
+          f"{scored} with benchmarked returns")

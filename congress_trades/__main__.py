@@ -12,7 +12,7 @@ import json
 import logging
 import sys
 
-from . import advise, digest, pipeline, prices
+from . import advise, digest, pipeline, prices, scorecard
 from .config import CONFIG
 from .publish import render
 
@@ -70,6 +70,14 @@ def main(argv=None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
+    p = sub.add_parser("scorecard", help="rank members by benchmark-adjusted record")
+    p.add_argument("--floor", type=int, default=CONFIG.default_floor)
+    p.add_argument("--horizon", choices=("30", "90"), default="90")
+    p.add_argument("--min-trades", type=int, default=scorecard.MIN_TRADES)
+    p.add_argument("--limit", type=int, default=0, help="0 = every qualifying member")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
     p = sub.add_parser("advise", help="send the digest to any OpenAI-compatible LLM")
     p.add_argument("--days", type=int, default=90)
     p.add_argument("--floor", type=int, default=CONFIG.default_floor)
@@ -110,6 +118,16 @@ def main(argv=None) -> int:
             print(json.dumps(d, indent=2, default=list))
         else:
             sys.stdout.write(digest.to_markdown(d))
+        return 0
+    if args.cmd == "scorecard":
+        if args.selftest:
+            scorecard.selftest(CONFIG)
+            return 0
+        rows = scorecard.members(args.floor, args.horizon, args.min_trades, CONFIG)
+        if args.json:
+            print(json.dumps(rows[:args.limit] if args.limit else rows, indent=2))
+        else:
+            sys.stdout.write(scorecard.to_markdown(rows, args.horizon, args.limit))
         return 0
     if args.cmd == "advise":
         return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)

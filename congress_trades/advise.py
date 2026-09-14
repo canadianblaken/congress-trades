@@ -35,8 +35,10 @@ Hard constraints on what this data can support:
 the DISCLOSURE date, which is the earliest a reader could have acted.
 - Amounts are the brackets members report, not position sizes. Never treat a \
 bracket as a real dollar amount.
-- There is no market benchmark in this data. A positive hit rate in a rising \
-market is not evidence of skill, and you must say so when you cite one.
+- Returns are alpha over SPY across the identical window, in the direction the \
+member took, so +0% means they matched the index. Alpha is still not proof of \
+skill: the windows overlap, a few prolific filers dominate the set, and a median \
+across trades is not a portfolio return.
 - Many disclosures are spouse-directed or index funds, and the filer may not have \
 chosen the trade at all.
 - You have no data after the digest's date, and no prices beyond what is shown.

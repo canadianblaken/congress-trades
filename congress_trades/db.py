@@ -73,6 +73,9 @@ CREATE TABLE IF NOT EXISTS trade_returns (
     ret_30     REAL,                   -- raw price change, sign NOT flipped for sells
     ret_90     REAL,
     ret_now    REAL,
+    bench_30   REAL,                   -- SPY over the identical window
+    bench_90   REAL,
+    bench_now  REAL,
     updated_at TEXT
 );
 

@@ -23,6 +23,9 @@ one page you can open in a browser:
   assignments, filing-lag record, party-unity score, and every trade they disclosed.
 - **Movers view** — net buying by industry, the names the most members converged on,
   and the *lone large positions* a single member took that nobody else touched.
+- **Scoreboard view** — every member ranked by how their disclosed trades actually
+  turned out against the index, buys and sells both, with their best and worst call
+  spelled out.
 - **Filters** — chamber, time window, and a disclosure-size floor, applied live.
 
 Everything is inlined into the output file. There is no server and no API.
@@ -78,6 +81,7 @@ python -m congress_trades votes                 # party unity + DW-NOMINATE
 python -m congress_trades prices                # forward returns per disclosure
 python -m congress_trades publish               # render the page
 python -m congress_trades digest                # prompt-sized brief of the trends
+python -m congress_trades scorecard             # rank members by record vs the index
 python -m congress_trades advise                # send that brief to an LLM
 ```
 
@@ -92,6 +96,44 @@ Filings land on weekdays; member biographies barely change. A reasonable split:
 
 `--rotate N` re-checks the N least-recently-updated members, so a daily run cycles
 the whole roster over about a week while staying well inside Wikipedia's rate limit.
+
+## Member scorecard
+
+Who is actually good at this, ranked, both directions:
+
+```bash
+python -m congress_trades scorecard                  # every qualifying member
+python -m congress_trades scorecard --limit 20        # top 20 only
+python -m congress_trades scorecard --horizon 30      # 30-day windows
+python -m congress_trades scorecard --json
+```
+
+Also the **Scoreboard** tab on the rendered page, with each member's best and worst
+single call written out ("sold WMB on 2026-07-21; it then fell 18% over 90 days
+while the market did +4%").
+
+Scoring, in both directions, against SPY over the identical window:
+
+```
+buy   alpha = stock − benchmark        they chose to hold it
+sell  alpha = benchmark − stock        they chose not to, and the index was the
+                                       alternative, so a name that then lagged
+                                       the market is a sell that paid
+```
+
+The benchmark is the whole point. Over a 90-day window where SPY returned +7%, a
+member whose buys returned +6% was *behind the market*, and every member looks
+like a genius if you quote raw returns. Both legs are read at the same calendar
+dates, so a holiday shifts the trade and the benchmark together.
+
+Everything is measured from the **disclosure** date. Trade-date returns would
+flatter these members considerably and mean nothing, because nobody outside the
+filing knew until the filing.
+
+What the ranking still cannot tell you, even benchmarked: windows overlap, the
+set is dominated by a few prolific filers, amounts are brackets, and a median
+across trades is not a portfolio return. `MIN_TRADES` is enforced because below
+about ten measurable trades a "record" is one lucky quarter.
 
 ## Feeding it to an AI
 
@@ -217,6 +259,8 @@ and committee service or a well-timed trade is not evidence of wrongdoing.
 ```bash
 python3 tests/test_parsers.py
 python3 tests/test_config_and_sectors.py
+python -m congress_trades digest --selftest      # aggregate invariants
+python -m congress_trades scorecard --selftest   # alpha signs, ranking, min sample
 ```
 
 The parser tests are the ones that matter: they run against real filing layouts, and

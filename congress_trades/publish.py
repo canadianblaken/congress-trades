@@ -12,7 +12,7 @@ import html
 import json
 from collections import Counter
 
-from . import db, legislators
+from . import db, legislators, scorecard
 from .config import CONFIG
 
 
@@ -79,9 +79,32 @@ def build_payload(conn) -> dict:
             "committeeNames": list(cnames)}
 
 
+def scorecard_payload(cfg) -> list[dict]:
+    """Flattened scorecard rows, with the best/worst calls already worded.
+
+    Deliberately precomputed: the alpha definition lives in scorecard.py, and a
+    second copy in JavaScript would be a second answer to "did this trade work".
+    """
+    out = []
+    for m in scorecard.members(cfg.default_floor, "90", cfg=cfg):
+        out.append({
+            "n": m["member"], "c": m["chamber"], "t": m["overall"]["n"],
+            "med": m["overall"]["med"], "beat": m["overall"]["beat"],
+            "bmed": m["buys"]["med"], "bn": m["buys"]["n"],
+            "smed": m["sells"]["med"], "sn": m["sells"]["n"],
+            "omed": m["open"]["med"], "on": m["open_n"],
+            "best": scorecard.describe(m["best"], m["best"]["alpha"]) if m["best"] else "",
+            "worst": (scorecard.describe(m["worst"], m["worst"]["alpha"])
+                      if m["worst"] and m["worst"] is not m["best"] else ""),
+        })
+    return out
+
+
 def render(cfg=CONFIG) -> int:
     with db.connect(cfg.db_path) as conn:
         payload = build_payload(conn)
+    payload["scorecard"] = scorecard_payload(cfg)
+    payload["scoreMin"] = scorecard.MIN_TRADES
     rows = payload["rows"]
     if not rows:
         print("no congress trades in db; run congress_backfill.py first")
@@ -288,6 +311,7 @@ TEMPLATE = r"""<!doctype html>
 <div class="views" role="tablist">
   <button data-view="members" aria-current="true">Members</button>
   <button data-view="movers" aria-current="false">Movers</button>
+  <button data-view="score" aria-current="false">Scoreboard</button>
 </div>
 
 <div class="wrap" id="view-members">
@@ -296,6 +320,8 @@ TEMPLATE = r"""<!doctype html>
 </div>
 
 <div id="view-movers" hidden></div>
+
+<div id="view-score" hidden></div>
 
 <p class="foot">Generated __GENERATED__ &middot;
   disclosures under the reporting floor are excluded &middot; this is public disclosure data,
@@ -690,6 +716,68 @@ function loneLargePositions(minAmount = 100001, limit = 15) {
     .slice(0, limit);
 }
 
+/* ---- Scoreboard ----------------------------------------------------------------
+   Rows arrive precomputed from scorecard.py; this only sorts and draws them. The
+   window and floor pickers do NOT apply here -- the record is the member's whole
+   measurable history at the default floor, and a record recomputed per window
+   would rank members by which quarter you happened to be looking at. Chamber
+   filters, since that one cannot change a member's own numbers.             */
+const SCORE = DATA.scorecard || [];
+let scoreSort = "med";
+
+function renderScore() {
+  const ch = $("#chamber").value;
+  const rows = SCORE.filter(r => !ch || r.c === ch)
+                    .slice()
+                    .sort((a, b) => (b[scoreSort] ?? -9) - (a[scoreSort] ?? -9));
+  const el = $("#view-score");
+  if (!rows.length) {
+    el.innerHTML = `<div class="panel"><p class="empty">Nothing scored yet. Run
+      <code>congress-trades prices</code> to attach returns.</p></div>`;
+    return;
+  }
+  const p = x => x == null ? "—"
+    : `<span style="color:var(--${x >= 0 ? "buy" : "sell"})">${(x*100 >= 0 ? "+" : "")
+       }${(x*100).toFixed(1)}%</span>`;
+  const r0 = x => x == null ? "—" : Math.round(x*100) + "%";
+  const head = [["med","Median alpha"],["beat","Beat index"],
+                ["bmed","Buys"],["smed","Sells"],["omed","Open now"]];
+
+  el.innerHTML = `
+    <div class="panel">
+      <h3>Member scoreboard</h3>
+      <p class="hint">Excess return over SPY across the same 90-day window, measured
+        from the <b>disclosure</b> date. A buy scores stock minus index; a sell scores
+        index minus stock, so exiting a name that then lagged the market counts as a
+        win. Members with fewer than ${DATA.scoreMin} measurable trades are
+        left out. Whole history at the default floor &mdash; the window and floor
+        pickers above do not apply to this view. Overlapping windows and reported
+        brackets mean a median across trades is not a portfolio return.</p>
+      <div class="tbl-scroll"><table>
+        <thead><tr><th>#</th><th>Member</th><th class="num">Trades</th>
+          ${head.map(([k,l]) => `<th class="num"><button class="sortby" data-k="${k}"
+             style="all:unset; cursor:pointer; ${k === scoreSort
+               ? "color:var(--white); font-weight:700" : ""}">${l}</button></th>`).join("")}
+        </tr></thead>
+        <tbody>${rows.map((r, i) => `<tr>
+          <td class="num">${i+1}</td>
+          <td><b>${esc(r.n)}</b> <span style="color:var(--ink-3)">${esc(r.c[0] || "")}</span>
+            ${r.best ? `<div class="hint" style="margin:.15rem 0 0">${esc(r.best)}</div>` : ""}
+            ${r.worst ? `<div class="hint" style="margin:.1rem 0 0; opacity:.75">${esc(r.worst)}</div>` : ""}
+          </td>
+          <td class="num">${r.t}</td>
+          <td class="num">${p(r.med)}</td>
+          <td class="num">${r0(r.beat)}</td>
+          <td class="num">${p(r.bmed)} <span style="color:var(--ink-3)">(${r.bn})</span></td>
+          <td class="num">${p(r.smed)} <span style="color:var(--ink-3)">(${r.sn})</span></td>
+          <td class="num">${p(r.omed)} <span style="color:var(--ink-3)">(${r.on})</span></td>
+        </tr>`).join("")}</tbody>
+      </table></div>
+    </div>`;
+  el.querySelectorAll("button.sortby").forEach(b =>
+    b.addEventListener("click", () => { scoreSort = b.dataset.k; renderScore(); }));
+}
+
 function renderMovers() {
   const movers = moverRows();
   const el = $("#view-movers");
@@ -774,6 +862,7 @@ function setView(v) {
     b.setAttribute("aria-current", b.dataset.view === v));
   $("#view-members").hidden = v !== "members";
   $("#view-movers").hidden = v !== "movers";
+  $("#view-score").hidden = v !== "score";
   refresh();
 }
 document.querySelector(".views").addEventListener("click", e => {
@@ -789,6 +878,7 @@ function refresh() {
   const el = $("#stat-shown");
   if (el) el.textContent = activeRows().length.toLocaleString();
   if (view === "movers") { renderMovers(); return; }
+  if (view === "score") { renderScore(); return; }
   renderRoster(); renderDetail();
 }
 $("#floor").value = "__DEFAULT_FLOOR__";
