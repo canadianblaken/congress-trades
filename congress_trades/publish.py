@@ -101,6 +101,7 @@ def render(cfg=CONFIG) -> int:
         "house": chambers.get("House", 0),
         "senate": chambers.get("Senate", 0),
         "floor": cfg.default_floor,
+        "updated": dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
     page = TEMPLATE.replace("__DATA__", json.dumps(payload, separators=(",", ":")))
     page = page.replace("__STATS__", json.dumps(stats))
@@ -322,6 +323,7 @@ $("#stats").innerHTML = [
   [STATS.senate.toLocaleString(), "Senate"],
   [STATS.span.replace(" to ", " → "), "coverage"],
   ['<span id="stat-shown">—</span>', "shown at this filter"],
+  [STATS.updated, "last updated"],
 ].map(([b,s]) => `<div class="stat"><b>${b}</b><span>${s}</span></div>`).join("");
 
 let selected = null;
