@@ -3,7 +3,9 @@
 US congressional stock-trade disclosures, collected from the primary sources and
 rendered as a single self-contained HTML page.
 
-No API keys. No paid data feed. No AI. Just the government's own filings, parsed.
+No API keys. No paid data feed. Just the government's own filings, parsed --
+plus an optional `digest`/`advise` pair that hands the result to an LLM of your
+choosing, with the limits of this data spelled out in the prompt.
 
 ![status](https://img.shields.io/badge/data-public%20domain-blue) ![python](https://img.shields.io/badge/python-3.10%2B-blue)
 
@@ -35,6 +37,7 @@ Everything is inlined into the output file. There is no server and no API.
 | [Wikipedia REST](https://en.wikipedia.org/api/rest_v1/) | biography and portrait | none |
 | [SEC EDGAR](https://www.sec.gov/) | ticker → SIC industry classification | contact in User-Agent |
 | [Voteview](https://voteview.com/) | roll-call votes, party unity, DW-NOMINATE | none |
+| [Yahoo Finance chart API](https://finance.yahoo.com/) | daily closes, for forward returns | none |
 
 ## Install
 
@@ -72,7 +75,10 @@ python -m congress_trades enrich                # resolve members, bios, committ
 python -m congress_trades enrich --rotate 20    # re-check only the 20 stalest
 python -m congress_trades sectors               # SEC industry classification
 python -m congress_trades votes                 # party unity + DW-NOMINATE
+python -m congress_trades prices                # forward returns per disclosure
 python -m congress_trades publish               # render the page
+python -m congress_trades digest                # prompt-sized brief of the trends
+python -m congress_trades advise                # send that brief to an LLM
 ```
 
 ### Keeping it current
@@ -86,6 +92,60 @@ Filings land on weekdays; member biographies barely change. A reasonable split:
 
 `--rotate N` re-checks the N least-recently-updated members, so a daily run cycles
 the whole roster over about a week while staying well inside Wikipedia's rate limit.
+
+## Feeding it to an AI
+
+`digest` compresses the database into roughly 90 lines an LLM can read in one
+prompt — the same aggregates the Movers view computes in JS, plus forward returns
+and a per-member track record:
+
+```bash
+python -m congress_trades digest --days 90            # markdown
+python -m congress_trades digest --days 90 --json     # same numbers, machine-readable
+```
+
+Sections: **convergence** (ranked by distinct members on one name, because several
+members independently landing on the same mid-cap beats one large index buy),
+**sector net flow**, **lone large positions** (one member alone, sized against
+that member's own median trade), **committee overlap** (a trade in a sector the
+member's own committee has jurisdiction over), and **track record** (share of
+closed 90-day windows that moved the way the member traded).
+
+`advise` posts that digest to any OpenAI-compatible `/chat/completions` endpoint —
+OpenAI, LiteLLM, Ollama, vLLM, OpenRouter, Groq, Together all speak it, and
+Anthropic models reach it through LiteLLM:
+
+```bash
+export CONGRESS_LLM_BASE=http://127.0.0.1:4000/v1   # default; any compatible host
+export CONGRESS_LLM_MODEL=reason                    # required
+export CONGRESS_LLM_KEY=...                         # if the endpoint wants one
+python -m congress_trades advise --days 90
+python -m congress_trades advise --dry-run          # print the prompt, call nothing
+```
+
+### What this data cannot tell you
+
+Read this before treating any output as a signal. It is also in the system prompt,
+because a model left to itself will turn convergence counts into confident picks:
+
+- **Filings lag the trade by up to 45 days.** Every return is measured from the
+  *disclosure* date — the earliest a reader could have acted — not the trade date.
+- **Amounts are brackets, not position sizes.** `$50k` means a reported range.
+- **There is no market benchmark here.** A good hit rate in a rising market is not
+  skill. Nothing is alpha-adjusted.
+- **Many disclosures are spouse-directed or index funds** the filer never chose.
+- Track-record rows under ~20 closed windows are noise, not a record.
+
+Prices come from Yahoo's public chart endpoint (no key). Only the derived
+per-disclosure returns are stored; the raw daily series is cached under `cache/`
+and discarded, because ten years of closes for ~1,300 tickers is millions of rows
+for the handful of dates that matter.
+
+Self-check, no framework:
+
+```bash
+python -m congress_trades digest --selftest
+```
 
 ## Configuration
 

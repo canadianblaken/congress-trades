@@ -1,5 +1,5 @@
-"""SQLite storage. Four tables: the disclosures themselves, who the filers are,
-their committee seats, and an industry label per ticker."""
+"""SQLite storage. Five tables: the disclosures themselves, who the filers are,
+their committee seats, an industry label per ticker, and forward price returns."""
 from __future__ import annotations
 
 import sqlite3
@@ -63,6 +63,18 @@ CREATE TABLE IF NOT EXISTS member_committees (
     PRIMARY KEY (bioguide, key)
 );
 CREATE INDEX IF NOT EXISTS idx_mc_bio ON member_committees(bioguide);
+
+CREATE TABLE IF NOT EXISTS trade_returns (
+    trade_id   INTEGER PRIMARY KEY,    -- congress_trades.id
+    px_0       REAL,                   -- close on/after the disclosure date
+    px_30      REAL,
+    px_90      REAL,
+    px_now     REAL,
+    ret_30     REAL,                   -- raw price change, sign NOT flipped for sells
+    ret_90     REAL,
+    ret_now    REAL,
+    updated_at TEXT
+);
 
 CREATE TABLE IF NOT EXISTS ticker_sectors (
     ticker     TEXT PRIMARY KEY,

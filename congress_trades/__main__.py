@@ -8,10 +8,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 
-from . import pipeline
+from . import advise, digest, pipeline, prices
 from .config import CONFIG
 from .publish import render
 
@@ -59,6 +60,21 @@ def main(argv=None) -> int:
     p = sub.add_parser("votes", help="party unity and DW-NOMINATE from Voteview")
     p.add_argument("--congress", type=int, default=0)
 
+    p = sub.add_parser("prices", help="forward returns per disclosure from daily closes")
+    p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--quiet", action="store_true")
+
+    p = sub.add_parser("digest", help="prompt-sized markdown/JSON brief of the trends")
+    p.add_argument("--days", type=int, default=90)
+    p.add_argument("--floor", type=int, default=CONFIG.default_floor)
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("advise", help="send the digest to any OpenAI-compatible LLM")
+    p.add_argument("--days", type=int, default=90)
+    p.add_argument("--floor", type=int, default=CONFIG.default_floor)
+    p.add_argument("--dry-run", action="store_true", help="print the prompt, call nothing")
+
     sub.add_parser("publish", help="render the self-contained HTML page")
 
     p = sub.add_parser("all", help="run every step in order")
@@ -82,13 +98,29 @@ def main(argv=None) -> int:
         return pipeline.tag_sectors(CONFIG, args.limit, args.quiet)
     if args.cmd == "votes":
         return pipeline.score_votes(CONFIG, args.congress)
+    if args.cmd == "prices":
+        return prices.compute(CONFIG, args.limit, args.quiet)
+    if args.cmd == "digest":
+        if args.selftest:
+            digest.selftest(CONFIG)
+            return 0
+        d = digest.build(args.days, args.floor, CONFIG)
+        if args.json:
+            d.pop("_sectors_by_ticker", None)
+            print(json.dumps(d, indent=2, default=list))
+        else:
+            sys.stdout.write(digest.to_markdown(d))
+        return 0
+    if args.cmd == "advise":
+        return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)
     if args.cmd == "publish":
         return render(CONFIG)
     if args.cmd == "all":
         for rc in (pipeline.backfill(CONFIG, quiet=args.quiet),
                    pipeline.enrich(CONFIG, rotate=args.rotate, quiet=args.quiet),
                    pipeline.tag_sectors(CONFIG, quiet=args.quiet),
-                   pipeline.score_votes(CONFIG)):
+                   pipeline.score_votes(CONFIG),
+                   prices.compute(CONFIG, quiet=args.quiet)):
             if rc:
                 return rc
         return render(CONFIG)
