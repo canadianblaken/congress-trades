@@ -171,15 +171,19 @@ own history and the newer half separately. The scoreboard shows both.
 
 **2. Ask whether the halves agree.** Across members, the rank correlation between
 first-half and second-half alpha is the single most useful number this project
-produces. On the data as collected it comes out around **r = +0.03** with 55% of
-members keeping the same sign — meaning a member's past alpha says essentially
-nothing about their next trade, and the top of the ranking is mostly whoever got
-lucky. The page says so above the table rather than in a footnote.
+produces. On six years of filings (65 members with a scoreable record) it comes
+out at **r = −0.09**, with only 43% of members keeping the same sign — worse than
+a coin flip. A member's past alpha says nothing about their next trade, and if
+anything points mildly the wrong way. The page says so above the table rather
+than in a footnote.
 
-**3. Concentration.** The member at the top of the alpha ranking had 89% of their
-scored trades in a single bitcoin ETF. That is one bet with a sample size of one,
-not a 27-trade record, so any member whose top ticker exceeds half their trades is
-flagged as **one bet** on the scoreboard.
+Collecting more years made this finding *stronger*, not weaker: on 18 months it
+was r = +0.03 across 29 members.
+
+**3. Concentration.** One member near the top of the alpha ranking has 89% of
+their scored trades in a single bitcoin ETF. That is one bet with a sample size of
+one, not a 27-trade record, so any member whose top ticker exceeds half their
+trades is flagged as **one bet** on the scoreboard — currently 4 of 65.
 
 ### The backtest
 
@@ -188,19 +192,30 @@ on disclosures *after* it, so selection never sees the period being measured —
 which is the exact error checks 1 and 2 exist to catch. Positions are equal-weight,
 held 90 days from the disclosure date, scored as alpha vs SPY.
 
-It reports a 90% bootstrap interval on every strategy, and that matters more than
-the point estimate: "top members" can show a mean of +3.3% on 42 positions with an
-interval of −2.4% to +8.8%, which is not a result. On the data as collected, **no
-strategy tested has an interval that misses zero**, at either split date — not
-member selection, not buys, not sells-as-shorts. The `bottom N members` row is the
-control: if the ranking carried information, it would be reliably worse.
+`--walk-forward` re-ranks every year and grades on the next, pooling all folds, so
+every year is a test year exactly once and the answer does not hinge on one cut.
+
+It reports two 90% bootstrap intervals, and the difference between them is the
+point. The **naive** one resamples individual positions. The **by month** one
+resamples whole calendar months, and it is the one that decides significance:
+hundreds of these disclosures land in the same few weeks and ride the same market,
+so treating positions as independent counts one regime as thousands of
+observations. On six years the naive interval calls "every disclosure" a
+significant +0.8% (+0.3% to +1.2%); clustered by month, the same number reads
+−0.0% to +1.5% and the result evaporates. Same for the bottom-members row.
+
+**On six years of filings, no strategy tested has a clustered interval that misses
+zero** — not following everyone, not member selection, not buys, not
+sells-as-shorts. Worse for the ranking: the top-selected members *underperformed*
+the naive follow-everyone baseline in four of five folds. That is what r = −0.09
+looks like in practice.
 
 Caveats the code states rather than hides: a sell is only actionable as a short and
 shorting is not frictionless (no borrow costs or availability modelled, so those
 rows are an upper bound); the reported figure is average position alpha, not a
-compounded equity curve; and the default `CONGRESS_YEARS` leaves only ~18 months of
-disclosures with a closed 90-day window, which is one split rather than a proper
-walk-forward. Collect more years before reading much into any of it.
+compounded equity curve; and months are a crude cluster — overlapping
+90-day holds still correlate across adjacent months, so a quarterly block
+bootstrap would be stricter still.
 
 ## Feeding it to an AI
 

@@ -270,6 +270,9 @@ TEMPLATE = r"""<!doctype html>
            padding:1.1rem 1.2rem; }
   .panel h3 { color:var(--white); margin:0 0 .2rem; font-size:1.05rem; }
   .panel .hint { color:var(--ink-3); font-size:12.5px; margin:0 0 1rem; }
+  button.jump { all:unset; cursor:pointer; color:var(--link);
+                border-bottom:1px dotted currentColor; font-variant-numeric:tabular-nums; }
+  button.jump:hover, button.jump:focus-visible { color:var(--white); }
   .secrow { display:grid; grid-template-columns:220px 1fr 54px; gap:.6rem; align-items:center;
             font-size:13px; margin-bottom:.28rem; }
   .secrow .nm { color:var(--ink-2); text-align:right; overflow:hidden; text-overflow:ellipsis;
@@ -786,7 +789,8 @@ function renderScore() {
             ${r.best ? `<div class="hint" style="margin:.15rem 0 0">${esc(r.best)}</div>` : ""}
             ${r.worst ? `<div class="hint" style="margin:.1rem 0 0; opacity:.75">${esc(r.worst)}</div>` : ""}
           </td>
-          <td class="num">${r.t}</td>
+          <td class="num"><button class="jump" data-jump="${esc(r.n)}"
+            title="See ${esc(r.n)}'s trades">${r.t}</button></td>
           <td class="num">${p(r.med)}</td>
           <td class="num">${r0(r.beat)}</td>
           <td class="num">${p(r.bmed)} <span style="color:var(--ink-3)">(${r.bn})</span></td>
@@ -798,6 +802,20 @@ function renderScore() {
     </div>`;
   el.querySelectorAll("button.sortby").forEach(b =>
     b.addEventListener("click", () => { scoreSort = b.dataset.k; renderScore(); }));
+  el.querySelectorAll("button.jump").forEach(b =>
+    b.addEventListener("click", () => jumpToMember(b.dataset.jump)));
+}
+
+/* The scoreboard scores a member's whole history at the default floor, so send the
+   window picker back to All time on the way over -- otherwise the trade count you
+   clicked lands on a detail panel filtered down to nothing. */
+function jumpToMember(name) {
+  const mi = M.findIndex(m => m.n === name);
+  if (mi < 0) return;
+  $("#window").value = "0";
+  setView("members");
+  select(mi);
+  $("#view-members").scrollIntoView({behavior: "smooth", block: "start"});
 }
 
 function renderMovers() {

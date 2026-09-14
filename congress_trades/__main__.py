@@ -83,6 +83,8 @@ def main(argv=None) -> int:
                    help="members are ranked before this date, graded after it")
     p.add_argument("--horizon", choices=("30", "90"), default="90")
     p.add_argument("--floor", type=int, default=0)
+    p.add_argument("--walk-forward", action="store_true",
+                   help="re-rank every year and grade on the next, pooling folds")
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
@@ -141,11 +143,16 @@ def main(argv=None) -> int:
         if args.selftest:
             backtest.selftest(CONFIG)
             return 0
-        d = backtest.run(args.split, args.horizon, args.floor, cfg=CONFIG)
+        if args.walk_forward:
+            d = backtest.walk_forward(args.horizon, args.floor, cfg=CONFIG)
+            render_bt = backtest.wf_to_markdown
+        else:
+            d = backtest.run(args.split, args.horizon, args.floor, cfg=CONFIG)
+            render_bt = backtest.to_markdown
         if args.json:
             print(json.dumps(d, indent=2))
         else:
-            sys.stdout.write(backtest.to_markdown(d))
+            sys.stdout.write(render_bt(d))
         return 0
     if args.cmd == "advise":
         return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)
