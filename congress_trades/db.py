@@ -83,6 +83,17 @@ CREATE TABLE IF NOT EXISTS trade_returns (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS committee_meetings (
+    event_id     TEXT PRIMARY KEY,
+    congress     INTEGER,
+    chamber      TEXT,
+    meeting_date TEXT,                 -- ISO date
+    type         TEXT,                 -- Hearing | Markup | Business Meeting
+    title        TEXT,
+    roots        TEXT                  -- comma separated 4-char committee roots
+);
+CREATE INDEX IF NOT EXISTS idx_cm_date ON committee_meetings(meeting_date);
+
 CREATE TABLE IF NOT EXISTS ticker_sectors (
     ticker     TEXT PRIMARY KEY,
     cik        TEXT,

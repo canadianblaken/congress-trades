@@ -49,7 +49,8 @@ def _ci(a: list[float], iters: int = 2000, seed: int = 0) -> tuple:
     return (means[int(iters * 0.05)], means[int(iters * 0.95)])
 
 
-def _ci_clustered(pairs: list[tuple], iters: int = 2000, seed: int = 0) -> tuple:
+def _ci_clustered(pairs: list[tuple], iters: int = 2000, seed: int = 0,
+                  level: float = 0.90) -> tuple:
     """Interval from resampling whole MONTHS, not individual positions.
 
     Positions here are nowhere near independent: hundreds of disclosures land in
@@ -77,7 +78,10 @@ def _ci_clustered(pairs: list[tuple], iters: int = 2000, seed: int = 0) -> tuple
         if vals:
             means.append(statistics.fmean(vals))
     means.sort()
-    return (means[int(len(means) * 0.05)], means[int(len(means) * 0.95)])
+    tail = (1 - level) / 2
+    lo = means[int(len(means) * tail)]
+    hi = means[min(len(means) - 1, int(len(means) * (1 - tail)))]
+    return (lo, hi)
 
 
 def _perf(trades, horizon) -> dict:

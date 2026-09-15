@@ -12,7 +12,8 @@ import json
 import logging
 import sys
 
-from . import advise, backtest, digest, lag, pipeline, prices, scorecard
+from . import (advise, backtest, committees, digest, lag, pipeline,
+               prices, scorecard)
 from .config import CONFIG
 from .publish import render
 
@@ -94,6 +95,16 @@ def main(argv=None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
+    p = sub.add_parser("committees", help="collect committee meeting dates (needs "
+                       "CONGRESS_API_KEY)")
+    p.add_argument("--quiet", action="store_true")
+
+    p = sub.add_parser("timing", help="do members trade around their own hearings?")
+    p.add_argument("--floor", type=int, default=1)
+    p.add_argument("--window", type=int, default=30)
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
     p = sub.add_parser("advise", help="send the digest to any OpenAI-compatible LLM")
     p.add_argument("--days", type=int, default=90)
     p.add_argument("--floor", type=int, default=CONFIG.default_floor)
@@ -170,6 +181,18 @@ def main(argv=None) -> int:
             print(json.dumps(d, indent=2, default=str))
         else:
             sys.stdout.write(lag.to_markdown(d))
+        return 0
+    if args.cmd == "committees":
+        return committees.collect(CONFIG, quiet=args.quiet)
+    if args.cmd == "timing":
+        if args.selftest:
+            committees.selftest(CONFIG)
+            return 0
+        d = committees.build(args.floor, args.window, CONFIG)
+        if args.json:
+            print(json.dumps(d, indent=2, default=str))
+        else:
+            sys.stdout.write(committees.to_markdown(d))
         return 0
     if args.cmd == "advise":
         return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)

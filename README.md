@@ -104,6 +104,8 @@ python -m congress_trades digest                # prompt-sized brief of the tren
 python -m congress_trades scorecard             # rank members by record vs the index
 python -m congress_trades backtest              # would following them have paid?
 python -m congress_trades lag                   # alpha by how late it was disclosed
+python -m congress_trades committees            # committee meeting dates (needs a key)
+python -m congress_trades timing                # do they trade around their hearings?
 python -m congress_trades advise                # send that brief to an LLM
 ```
 
@@ -275,6 +277,51 @@ This command defaults to `--floor 1` rather than the display floor: the $15k flo
 keeps rebalancing noise off the page but costs four fifths of the sample, and here
 the lag is what is being measured, not the trade size.
 
+## Committee timing
+
+The digest's committee-overlap flag only says a member traded a sector their
+committee oversees, which is unsurprising — people invest in what they know. The
+testable claim is about **timing**: did the trade land just before a meeting that
+committee held?
+
+```bash
+export CONGRESS_API_KEY=...        # free: https://api.congress.gov/sign-up/
+python -m congress_trades committees   # ~9,600 meetings, 2021-2026, ~2h once
+python -m congress_trades timing
+```
+
+9,639 meetings across congresses 117–119 put 15,217 priced trades within 30 days
+of a meeting held by a committee that member sits on. Negative days mean the trade
+came *before* the meeting.
+
+Of nine buckets, one misses zero: −14 to −8 days, +1.2% median [+0.6%, +2.4%]. It
+also survives a Bonferroni-corrected level for having tested nine buckets — but
+only just, at [+0.08%, +2.98%]. Four reasons that is still not the insider thesis,
+all printed with the table rather than left to the reader:
+
+- **Returns are measured from the disclosure date, not the trade date.** A trade
+  placed 10 days before a hearing has its 90-day window start whenever it was
+  *filed*, up to 45 days later — the hearing is long past. This test locates trades
+  relative to meetings; it cannot measure a return earned *through* one.
+- **The gradient is the wrong shape.** A real information effect is strongest
+  nearest the event and decays. Here the days immediately before a meeting (−7 to
+  −1) are flat and a middle bucket is up. That argues noise.
+- **Proximity is not jurisdiction.** The match is "sits on a committee that met
+  near the trade", not "that committee had business with the company". Busy
+  committees meet weekly.
+- **Check the member columns.** The table reports how many members are in each
+  bucket and what share its top three supply. A result carried by three people is
+  a claim about three people.
+
+The before/after split shows nothing at all: 7 days before +0.2%, after +0.2%,
+further out −0.1%, every interval spanning zero.
+
+Why an API key at all: `docs.house.gov`'s calendar redirects to an error page,
+`senate.gov` publishes only the current week, and govinfo's CHRG sitemaps are
+published transcripts whose coverage collapses recently — 183 packages for 2026
+against ~1,300 for a completed year. Building on that would have meant testing
+timing on a sample biased toward older trades.
+
 ## An MCP server, for agents
 
 ```bash
@@ -433,6 +480,7 @@ python -m congress_trades digest --selftest      # aggregate invariants
 python -m congress_trades scorecard --selftest   # alpha signs, ranking, concentration
 python -m congress_trades backtest --selftest    # no-lookahead + CI sanity
 python -m congress_trades lag --selftest         # bucket partition + sane lags
+python -m congress_trades timing --selftest      # widening correction + buckets
 python -c 'from congress_trades import mcp_server; mcp_server.selftest()'
 ```
 
