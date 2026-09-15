@@ -90,8 +90,9 @@ def scorecard_payload(cfg) -> list[dict]:
         out.append({
             "n": m["member"], "c": m["chamber"], "t": m["overall"]["n"],
             "med": m["overall"]["med"], "beat": m["overall"]["beat"],
+            "smed": m["overall"]["smed"],
             "bmed": m["buys"]["med"], "bn": m["buys"]["n"],
-            "smed": m["sells"]["med"], "sn": m["sells"]["n"],
+            "sellmed": m["sells"]["med"], "sn": m["sells"]["n"],
             "omed": m["open"]["med"], "on": m["open_n"],
             "best": scorecard.describe(m["best"], m["best"]["alpha"]) if m["best"] else "",
             "worst": (scorecard.describe(m["worst"], m["worst"]["alpha"])
@@ -748,8 +749,8 @@ function renderScore() {
     : `<span style="color:var(--${x >= 0 ? "buy" : "sell"})">${(x*100 >= 0 ? "+" : "")
        }${(x*100).toFixed(1)}%</span>`;
   const r0 = x => x == null ? "—" : Math.round(x*100) + "%";
-  const head = [["med","Median alpha"],["beat","Beat index"],
-                ["bmed","Buys"],["smed","Sells"],["h2","2nd half"],
+  const head = [["med","vs index"],["smed","vs sector"],["beat","Beat index"],
+                ["bmed","Buys"],["sellmed","Sells"],["h2","2nd half"],
                 ["omed","Open now"]];
 
   el.innerHTML = `
@@ -770,7 +771,9 @@ function renderScore() {
       <p class="hint">Excess return over SPY across the same 90-day window, measured
         from the <b>disclosure</b> date. A buy scores stock minus index; a sell scores
         index minus stock, so exiting a name that then lagged the market counts as a
-        win. Members with fewer than ${DATA.scoreMin} measurable trades are
+        win. <b>vs sector</b> repeats the figure against the trade&rsquo;s own sector
+        ETF: beating the index but not the sector means a sector was timed, not a
+        stock picked. Members with fewer than ${DATA.scoreMin} measurable trades are
         left out. Whole history at the default floor &mdash; the window and floor
         pickers above do not apply to this view. Overlapping windows and reported
         brackets mean a median across trades is not a portfolio return.</p>
@@ -792,9 +795,10 @@ function renderScore() {
           <td class="num"><button class="jump" data-jump="${esc(r.n)}"
             title="See ${esc(r.n)}'s trades">${r.t}</button></td>
           <td class="num">${p(r.med)}</td>
+          <td class="num">${p(r.smed)}</td>
           <td class="num">${r0(r.beat)}</td>
           <td class="num">${p(r.bmed)} <span style="color:var(--ink-3)">(${r.bn})</span></td>
-          <td class="num">${p(r.smed)} <span style="color:var(--ink-3)">(${r.sn})</span></td>
+          <td class="num">${p(r.sellmed)} <span style="color:var(--ink-3)">(${r.sn})</span></td>
           <td class="num">${p(r.h1)} <span style="color:var(--ink-3)">&rarr;</span> ${p(r.h2)}</td>
           <td class="num">${p(r.omed)} <span style="color:var(--ink-3)">(${r.on})</span></td>
         </tr>`).join("")}</tbody>

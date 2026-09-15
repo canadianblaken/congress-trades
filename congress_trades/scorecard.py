@@ -38,6 +38,20 @@ def alpha(tx_type: str, ret: float | None, bench: float | None) -> float | None:
     return (bench - ret) if tx_type == "sell" else (ret - bench)
 
 
+def sector_alpha(t: dict, horizon: str = "90") -> float | None:
+    """The same figure measured against the trade's own sector ETF.
+
+    This is the one that separates picking a stock from picking a sector. Buying
+    semiconductors through a semiconductor rally beats SPY without having chosen
+    anything; against SOXX the same trades read flat. Where alpha-vs-index is
+    large and this is near zero, the member rode their sector.
+
+    Not meaningful for fund holdings: an ETF inherits its sponsor's SIC code, so
+    a spot bitcoin trust scores against financials. See SECTOR_ETF in prices.py.
+    """
+    return alpha(t["tx_type"], t.get(f"ret_{horizon}"), t.get(f"sec_{horizon}"))
+
+
 def load(floor: int, cfg=CONFIG):
     with db.connect(cfg.db_path) as conn:
         return [dict(r) for r in conn.execute(
@@ -45,7 +59,8 @@ def load(floor: int, cfg=CONFIG):
                       t.amount_range, t.owner, t.asset_name,
                       COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0,
                       r.ret_30, r.ret_90, r.ret_now,
-                      r.bench_30, r.bench_90, r.bench_now
+                      r.bench_30, r.bench_90, r.bench_now,
+                      r.sec_30, r.sec_90, r.sec_now, r.sec_etf
                  FROM congress_trades t
                  JOIN trade_returns r ON r.trade_id = t.id
                 WHERE t.ticker != '' AND t.amount_min >= ?
@@ -53,13 +68,18 @@ def load(floor: int, cfg=CONFIG):
 
 
 def _summary(trades, horizon="90"):
-    """Median alpha and beat rate over trades that have a closed window."""
+    """Median alpha and beat rate over trades that have a closed window, against
+    the index and against each trade's own sector."""
     a = [x for x in (alpha(t["tx_type"], t[f"ret_{horizon}"], t[f"bench_{horizon}"])
                      for t in trades) if x is not None]
+    sa = [x for x in (sector_alpha(t, horizon) for t in trades) if x is not None]
     if not a:
-        return {"n": 0, "med": None, "beat": None}
+        return {"n": 0, "med": None, "beat": None, "smed": None, "sn": 0}
     return {"n": len(a), "med": statistics.median(a),
-            "beat": sum(1 for x in a if x > 0) / len(a)}
+            "beat": sum(1 for x in a if x > 0) / len(a),
+            # Separate count: a few tickers have no sector, so the two medians
+            # are not always over the same trades.
+            "smed": statistics.median(sa) if sa else None, "sn": len(sa)}
 
 
 def _notable(trades, horizon="90"):
@@ -208,18 +228,17 @@ def to_markdown(rows: list[dict], horizon="90", limit=0) -> str:
          "stock − index, a sell scores index − stock, so exiting a name that then "
          "lagged the market counts as a win.",
          "",
-         "| # | member | trades | median alpha | beat index | buys | sells "
-         "| 1st half → 2nd | top name | open now |",
+         "| # | member | trades | vs index | vs sector | beat index | buys | sells "
+         "| 1st half → 2nd | top name |",
          "|--:|---|--:|--:|--:|--:|--:|--:|--:|--:|"]
     for i, m in enumerate(shown, 1):
-        sp, c = m["split"], m["conc"]
-        L.append(f"| {i} | {m['member']} ({m['chamber'][:1]}) | {m['overall']['n']} "
-                 f"| {pct(m['overall']['med'])} | {rate(m['overall']['beat'])} "
+        sp, c, o = m["split"], m["conc"], m["overall"]
+        L.append(f"| {i} | {m['member']} ({m['chamber'][:1]}) | {o['n']} "
+                 f"| {pct(o['med'])} | {pct(o['smed'])} | {rate(o['beat'])} "
                  f"| {pct(m['buys']['med'])} ({m['buys']['n']}) "
                  f"| {pct(m['sells']['med'])} ({m['sells']['n']}) "
                  f"| {pct(sp['first']['med'])} → {pct(sp['second']['med'])} "
-                 f"| {c['top']} {rate(c['share'])} "
-                 f"| {pct(m['open']['med'])} ({m['open_n']}) |")
+                 f"| {c['top']} {rate(c['share'])} |")
 
     ps = persistence(rows)
     if ps["r"] is not None:
@@ -230,6 +249,12 @@ def to_markdown(rows: list[dict], horizon="90", limit=0) -> str:
                "trade: read this as history, not as a tip sheet."
                if abs(ps["r"]) < 0.25 else
                "Some persistence, though still one sample over overlapping windows."),
+              "",
+              "**vs sector** is the same alpha measured against the trade's own "
+              "sector ETF instead of SPY. Where a member beats the index but not "
+              "their sector, they timed a sector rather than picked a stock -- and "
+              "a sector bet is far easier to buy directly than to copy from a "
+              "45-day-old filing.",
               "",
               "The **top name** column is the share of a member's scored trades in "
               "their single most-traded ticker. A high share means the record is one "
@@ -251,6 +276,10 @@ def selftest(cfg=CONFIG):
     assert alpha("buy", 0.10, 0.07) == 0.030000000000000002 or \
         abs(alpha("buy", 0.10, 0.07) - 0.03) < 1e-9
     assert abs(alpha("sell", -0.10, 0.05) - 0.15) < 1e-9, "sell alpha sign"
+    assert sector_alpha({"tx_type": "buy", "ret_90": 0.2, "sec_90": 0.25}) is not None
+    assert abs(sector_alpha({"tx_type": "buy", "ret_90": 0.2, "sec_90": 0.25})
+               + 0.05) < 1e-9, "sector alpha sign"
+    assert sector_alpha({"tx_type": "buy", "ret_90": 0.2, "sec_90": None}) is None
     assert alpha("sell", None, 0.05) is None and alpha("buy", 0.1, None) is None
     rows = members(cfg=cfg)
     assert rows, "no members scored -- run `congress-trades prices` first"
@@ -269,10 +298,12 @@ def selftest(cfg=CONFIG):
         sp = m["split"]
         for half in ("first", "second"):
             assert sp[half]["n"] <= m["overall"]["n"]
+        assert m["overall"]["sn"] <= m["overall"]["n"], "more sector than index scores"
     ps = persistence(rows)
     assert ps["r"] is None or -1 <= ps["r"] <= 1, "correlation out of range"
     txt = to_markdown(rows)
-    assert "median alpha" in txt and "Best and worst" in txt
+    assert "vs index" in txt and "vs sector" in txt, "columns renamed"
+    assert "Best and worst" in txt
     print(f"selftest ok: {len(rows)} members scored, "
           f"best {rows[0]['member']} {pct(rows[0]['overall']['med'])}, "
           f"worst {rows[-1]['member']} {pct(rows[-1]['overall']['med'])}")

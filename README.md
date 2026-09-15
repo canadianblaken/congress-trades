@@ -142,6 +142,25 @@ sell  alpha = benchmark − stock        they chose not to, and the index was th
                                        the market is a sell that paid
 ```
 
+Two benchmarks, side by side. **vs index** is SPY. **vs sector** is the trade's own
+sector ETF, and it separates picking a stock from picking a sector: buying
+semiconductors through a semiconductor rally beats SPY without having chosen
+anything, but against SOXX the same trades read flat.
+
+The gap between the two columns is where most of the apparent skill lives. Across
+the 65 scored members, the median record is **+1.22% vs the index but only +0.43%
+vs sector** — roughly two thirds of the edge is sector exposure, not selection. 29
+of the 44 positive members shrink when measured against their own sector, and 9 go
+from positive to zero-or-negative: they rode the sector outright.
+
+The sector mapping (`SECTOR_ETF` in `prices.py`) is a judgement call, not a
+definition — these labels are SIC rollups and some buckets straddle two ETFs.
+Unmapped sectors fall back to SPY. One case is outright wrong and worth knowing:
+funds inherit their sponsor's SIC code, so a spot bitcoin trust files under
+"Commodity Contracts Brokers & Dealers", rolls up to Banking & Finance, and gets
+benchmarked against banks. **Sector alpha on a fund holding is noise** — read that
+column only for operating companies.
+
 The benchmark is the whole point. Over a 90-day window where SPY returned +7%, a
 member whose buys returned +6% was *behind the market*, and every member looks
 like a genius if you quote raw returns. Both legs are read at the same calendar

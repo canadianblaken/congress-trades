@@ -76,6 +76,10 @@ CREATE TABLE IF NOT EXISTS trade_returns (
     bench_30   REAL,                   -- SPY over the identical window
     bench_90   REAL,
     bench_now  REAL,
+    sec_30     REAL,                   -- the trade's own sector ETF, same window
+    sec_90     REAL,
+    sec_now    REAL,
+    sec_etf    TEXT,                   -- which ETF stood in for the sector
     updated_at TEXT
 );
 

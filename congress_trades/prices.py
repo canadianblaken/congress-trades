@@ -26,6 +26,55 @@ from .config import CONFIG, user_agent
 
 CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{sym}"
 BENCHMARK = "SPY"             # what the money would have done sitting in the market
+
+# A second benchmark, per sector, to separate stock picking from sector timing.
+# A member who only bought semiconductors through a semiconductor rally beats SPY
+# without having picked anything; measured against SOXX the same trades read flat.
+#
+# The mapping is a judgement call, not a definition. These labels are rolled up
+# from SEC SIC codes and some buckets genuinely straddle two ETFs -- "Pharma &
+# Chemicals" is mostly healthcare with industrial chemicals mixed in, and
+# "Machinery & Computer Equipment" is where SIC files Apple. Each label goes to
+# the ETF that fits the bulk of its volume; anything unmapped falls back to the
+# broad market rather than silently scoring against nothing.
+#
+# Known bad case: ETFs and trusts inherit the SIC of their sponsor, so a spot
+# bitcoin fund files under "Commodity Contracts Brokers & Dealers" and rolls up
+# to Banking & Finance -- which benchmarks bitcoin against banks. Sector alpha on
+# any fund holding is noise for this reason; read it only for operating companies.
+SECTOR_ETF = {
+    "Software & IT Services": "XLK",
+    "Semiconductors": "SOXX",
+    "Machinery & Computer Equipment": "XLK",
+    "Electronics & Electrical Equipment": "XLK",
+    "Communications Equipment": "XLK",
+    "Communications": "XLC",
+    "Pharma & Chemicals": "XLV",
+    "Instruments & Medical Devices": "XLV",
+    "Healthcare Services": "XLV",
+    "Banking & Finance": "XLF",
+    "Insurance": "XLF",
+    "Retail": "XLY",
+    "Consumer Services": "XLY",
+    "Textiles & Apparel": "XLY",
+    "Food & Beverage": "XLP",
+    "Wholesale": "XLP",
+    "Agriculture": "XLP",
+    "Utilities & Power": "XLU",
+    "Mining & Energy Extraction": "XLE",
+    "Petroleum Refining": "XLE",
+    "Materials": "XLB",
+    "Metals & Fabrication": "XLB",
+    "Paper, Wood & Publishing": "XLB",
+    "Transportation Equipment": "XLI",
+    "Transportation & Logistics": "XLI",
+    "Construction & Engineering": "XLI",
+    "Professional Services": "XLI",
+    "HVAC & Refrigeration": "XLI",
+    "Misc Manufacturing": "XLI",
+    "Real Estate (REIT)": "XLRE",
+    "Real Estate": "XLRE",
+}
 CACHE_TTL = 20 * 3600          # a trading day; closes never change retroactively
 PAUSE = 0.25                   # Yahoo starts 429ing a few requests per second
 
@@ -89,14 +138,20 @@ def compute(cfg=CONFIG, limit: int = 0, quiet: bool = False) -> int:
     bench = series(BENCHMARK, cfg)
     if not bench:
         print(f"warning: no {BENCHMARK} series; returns will have no benchmark")
+    # One series per sector ETF, fetched once and shared by every trade in it.
+    etfs = {e: series(e, cfg) for e in sorted(set(SECTOR_ETF.values()))}
+    etfs = {e: v for e, v in etfs.items() if v}
     with db.connect(cfg.db_path) as conn:
         rows = conn.execute(
-            """SELECT t.id, t.ticker, COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0
+            """SELECT t.id, t.ticker, COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0,
+                      COALESCE(s.sector, '') AS sector
                  FROM congress_trades t
                  LEFT JOIN trade_returns r ON r.trade_id = t.id
+                 LEFT JOIN ticker_sectors s ON s.ticker = t.ticker
                 WHERE t.ticker != '' AND d0 != ''
                   AND (r.trade_id IS NULL OR r.ret_90 IS NULL
-                       OR (r.bench_90 IS NULL AND r.ret_90 IS NOT NULL))
+                       OR (r.bench_90 IS NULL AND r.ret_90 IS NOT NULL)
+                       OR (r.sec_90 IS NULL AND r.ret_90 IS NOT NULL))
                 ORDER BY d0 DESC""").fetchall()
         if limit:
             rows = rows[:limit]
@@ -140,17 +195,35 @@ def compute(cfg=CONFIG, limit: int = 0, quiet: bool = False) -> int:
                             bench, (d0 + dt.timedelta(days=90)).isoformat())
                         b90 = (bx / b0 - 1) if bx else None
                     b_now = bench[max(bench)] / b0 - 1
+                # Same arithmetic against the sector ETF. Unmapped sectors get the
+                # broad market, so the column always means "the obvious alternative".
+                etf = SECTOR_ETF.get(t["sector"] or "")
+                sec = etfs.get(etf) if etf else bench
+                s30 = s90 = s_now = None
+                if sec:
+                    c0 = _close_at_or_after(sec, t["d0"])
+                    if c0:
+                        if p30:
+                            cx = _close_at_or_after(
+                                sec, (d0 + dt.timedelta(days=30)).isoformat())
+                            s30 = (cx / c0 - 1) if cx else None
+                        if p90:
+                            cx = _close_at_or_after(
+                                sec, (d0 + dt.timedelta(days=90)).isoformat())
+                            s90 = (cx / c0 - 1) if cx else None
+                        s_now = sec[max(sec)] / c0 - 1
                 conn.execute(
                     """INSERT OR REPLACE INTO trade_returns
                        (trade_id, px_0, px_30, px_90, px_now,
                         ret_30, ret_90, ret_now, bench_30, bench_90, bench_now,
-                        updated_at)
-                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        sec_30, sec_90, sec_now, sec_etf, updated_at)
+                       VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (t["id"], p0, p30, p90, px_now,
                      (p30 / p0 - 1) if p30 else None,
                      (p90 / p0 - 1) if p90 else None,
                      (px_now / p0 - 1),
                      b30, b90, b_now,
+                     s30, s90, s_now, etf or BENCHMARK,
                      db.utcnow()))
                 done += 1
             if not quiet and i % 25 == 0:

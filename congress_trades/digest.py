@@ -157,6 +157,8 @@ def to_markdown(d: dict) -> str:
          "  in the direction the member took. A buy scores stock minus index; a sell",
          "  scores index minus stock, so exiting a name that then lagged the market",
          "  counts as a win. +0% means the member merely matched the index.",
+         "- 'vs sector' repeats the figure against the trade's own sector ETF. Beating",
+         "  the index but not the sector means the member timed a sector, not a stock.",
          "- Alpha still is not skill: windows overlap, the set is dominated by a few",
          "  prolific filers, and a median across trades is not a portfolio return.",
          "- Many disclosures are spouse-directed or index funds the filer never chose.", ""]
@@ -193,13 +195,13 @@ def to_markdown(d: dict) -> str:
                  f"| {money(r['amount_min'])} | {r['disclosed']} |")
 
     L += ["", "## Scorecard — best and worst records, 90d alpha vs SPY, all history",
-          "| member | scored | median alpha | beat index | buys | sells "
+          "| member | scored | vs index | vs sector | beat index | buys | sells "
           "| 1st half → 2nd | top name |",
-          "|---|--:|--:|--:|--:|--:|--:|--:|"]
+          "|---|--:|--:|--:|--:|--:|--:|--:|--:|"]
     for o in d["scorecard"]:
-        sp, c = o["split"], o["conc"]
-        L.append(f"| {o['member']} | {o['overall']['n']} | {pct(o['overall']['med'])} "
-                 f"| {scorecard.rate(o['overall']['beat'])} "
+        sp, c, ov = o["split"], o["conc"], o["overall"]
+        L.append(f"| {o['member']} | {ov['n']} | {pct(ov['med'])} "
+                 f"| {pct(ov['smed'])} | {scorecard.rate(ov['beat'])} "
                  f"| {pct(o['buys']['med'])} | {pct(o['sells']['med'])} "
                  f"| {pct(sp['first']['med'])} → {pct(sp['second']['med'])} "
                  f"| {c['top']} {scorecard.rate(c['share'])} |")
