@@ -103,6 +103,7 @@ python -m congress_trades publish               # render the page
 python -m congress_trades digest                # prompt-sized brief of the trends
 python -m congress_trades scorecard             # rank members by record vs the index
 python -m congress_trades backtest              # would following them have paid?
+python -m congress_trades lag                   # alpha by how late it was disclosed
 python -m congress_trades advise                # send that brief to an LLM
 ```
 
@@ -236,6 +237,74 @@ compounded equity curve; and months are a crude cluster — overlapping
 90-day holds still correlate across adjacent months, so a quarterly block
 bootstrap would be stricter still.
 
+## Filing lag
+
+```bash
+python -m congress_trades lag
+```
+
+The STOCK Act allows 45 days, and 3,177 of the measurable disclosures here are
+past it. The obvious hypothesis is that members file their winners late. **It is
+wrong, and the reverse is the only thing in this project that survives a
+clustered interval:**
+
+| filing lag | disclosures | median α vs index | 90% by month | |
+|---|--:|--:|:--:|---|
+| 0–15 days | 3,591 | **+1.06%** | +0.58% to +1.97% | significant |
+| 16–30 days | 7,684 | −0.08% | −0.62% to +0.31% | |
+| 31–45 days | 5,340 | +0.61% | −0.08% to +1.13% | |
+| 46–90 days | 783 | −0.82% | −2.77% to +0.55% | |
+| 91–365 days | 1,279 | **−1.75%** | −2.23% to −0.42% | significant |
+
+Within 45 days: **+0.33%** [+0.04%, +0.71%]. Past 45 days: **−0.63%** [−2.03%,
+−0.35%]. Opposite signs, both significant.
+
+Read the mechanism before reading skill into it. Every return is measured from the
+**disclosure** date, so a trade filed a year after execution is scored on the stock
+a year after the member acted. Negative alpha in the late buckets mostly says the
+disclosure had nothing actionable left in it — not that the member traded badly.
+The useful direction is the other one: promptly disclosed trades are the subset
+still worth looking at.
+
+It is not a member trait either. Within each of 109 members' own histories, the
+rank correlation between filing lag and alpha is **r = −0.02** with 45% positive.
+Later-filed trades are not that member's better trades; the population gradient is
+about which disclosures are fresh, not who files late.
+
+This command defaults to `--floor 1` rather than the display floor: the $15k floor
+keeps rebalancing noise off the page but costs four fifths of the sample, and here
+the lag is what is being measured, not the trade size.
+
+## An MCP server, for agents
+
+```bash
+python -m congress_trades.mcp_server        # JSON-RPC over stdio
+```
+
+Five tools: `query_trades`, `member_scorecard`, `run_backtest`, `filing_lag`,
+`digest`. Register it with any MCP client — for Claude Code:
+
+```bash
+claude mcp add congress-trades -- python3 -m congress_trades.mcp_server
+```
+
+The point of it is not query access, it is **guardrails**. 33,000 rows sliced
+freely is a multiple-comparisons machine: an agent that can cut the data fifty ways
+will find a member who beats their sector 80% of the time on twelve trades and
+report it as a finding. So:
+
+- Every response carrying a return also carries its sample size and a
+  month-clustered 90% interval, and computes `significant` itself rather than
+  leaving it to the caller's judgement.
+- A slice under 8 measurable trades **refuses to average at all** and says why.
+- A slice with enough trades but too few calendar months to resample returns an
+  explicit warning that the figure must not be quoted as a result.
+- `run_backtest` strips the naive per-position interval before replying, so only
+  the clustered one is quotable.
+- The server sends its findings-so-far as instructions on `initialize`: alpha does
+  not persist, two thirds of the edge is sector, no strategy clears zero. An agent
+  is told not to re-derive those as news, and to say how many slices it tried.
+
 ## Feeding it to an AI
 
 `digest` compresses the database into roughly 90 lines an LLM can read in one
@@ -363,6 +432,8 @@ python3 tests/test_config_and_sectors.py
 python -m congress_trades digest --selftest      # aggregate invariants
 python -m congress_trades scorecard --selftest   # alpha signs, ranking, concentration
 python -m congress_trades backtest --selftest    # no-lookahead + CI sanity
+python -m congress_trades lag --selftest         # bucket partition + sane lags
+python -c 'from congress_trades import mcp_server; mcp_server.selftest()'
 ```
 
 The parser tests are the ones that matter: they run against real filing layouts, and

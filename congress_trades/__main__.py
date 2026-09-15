@@ -12,7 +12,7 @@ import json
 import logging
 import sys
 
-from . import advise, backtest, digest, pipeline, prices, scorecard
+from . import advise, backtest, digest, lag, pipeline, prices, scorecard
 from .config import CONFIG
 from .publish import render
 
@@ -88,6 +88,12 @@ def main(argv=None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
+    p = sub.add_parser("lag", help="does filing lag relate to how the trade did?")
+    p.add_argument("--floor", type=int, default=1,
+                   help="1 (default) uses every measurable trade, not the display floor")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
     p = sub.add_parser("advise", help="send the digest to any OpenAI-compatible LLM")
     p.add_argument("--days", type=int, default=90)
     p.add_argument("--floor", type=int, default=CONFIG.default_floor)
@@ -153,6 +159,17 @@ def main(argv=None) -> int:
             print(json.dumps(d, indent=2))
         else:
             sys.stdout.write(render_bt(d))
+        return 0
+    if args.cmd == "lag":
+        if args.selftest:
+            lag.selftest(CONFIG)
+            return 0
+        d = lag.build(args.floor, CONFIG)
+        if args.json:
+            d.pop("within", None) and None
+            print(json.dumps(d, indent=2, default=str))
+        else:
+            sys.stdout.write(lag.to_markdown(d))
         return 0
     if args.cmd == "advise":
         return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)
