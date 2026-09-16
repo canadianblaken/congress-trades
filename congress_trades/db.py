@@ -248,6 +248,52 @@ CREATE TABLE IF NOT EXISTS annual_positions (
     organization TEXT,
     UNIQUE(doc_id, row_idx)
 );
+
+-- Federal judiciary financial disclosures (Courthouse Ethics and Transparency Act,
+-- 2022), sourced from Free Law Project's public-domain bulk CSV snapshots -- see
+-- congress_trades/judiciary.py for why (the AO's own database gates every visit
+-- behind identity registration + reCAPTCHA, which this project will not automate).
+-- IDs are CourtListener's own, kept as the primary key so a re-ingested quarterly
+-- snapshot updates rows in place rather than duplicating them.
+CREATE TABLE IF NOT EXISTS judiciary_judges (
+    person_id    INTEGER PRIMARY KEY,   -- CourtListener person id
+    name_first   TEXT,
+    name_middle  TEXT,
+    name_last    TEXT,
+    name_suffix  TEXT,
+    slug         TEXT,
+    fjc_id       TEXT,                  -- Federal Judicial Center id, when known
+    court_id     TEXT,                  -- CourtListener court slug of the most recent judicial seat found
+    court_name   TEXT,                  -- resolved from the courts snapshot at ingest time
+    updated_at   TEXT
+);
+
+CREATE TABLE IF NOT EXISTS judiciary_disclosures (
+    id           INTEGER PRIMARY KEY,   -- CourtListener financial_disclosure id
+    person_id    INTEGER,
+    year         INTEGER,               -- reporting year; NULL if the source row was unrecoverable
+    report_type  TEXT,
+    is_amended   INTEGER,
+    filepath     TEXT,                  -- the underlying PDF, on CourtListener's storage
+    first_seen   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_jd_person ON judiciary_disclosures(person_id);
+CREATE INDEX IF NOT EXISTS idx_jd_year   ON judiciary_disclosures(year);
+
+CREATE TABLE IF NOT EXISTS judiciary_investments (
+    id             INTEGER PRIMARY KEY,   -- CourtListener investment id
+    disclosure_id  INTEGER NOT NULL,
+    description    TEXT,                 -- asset name as filed -- no ticker; see judiciary.py
+    tx_type        TEXT,                 -- buy | sell | other | '' (normalized from free text)
+    tx_date        TEXT,                 -- ISO, '' if absent or unparseable
+    income_code    TEXT,                 -- AO-10 Income Gain Code (A-H2)
+    value_code     TEXT,                 -- AO-10 Category-of-Value code (J-P4), holding's own value
+    tx_value_code  TEXT,                 -- same code table, for the transaction amount
+    tx_gain_code   TEXT,
+    tx_partner     TEXT,
+    first_seen     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ji_disclosure ON judiciary_investments(disclosure_id);
 """
 
 
