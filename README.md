@@ -331,11 +331,30 @@ python -m congress_trades alerts --dry-run         # look without recording
 python -m congress_trades alerts --headline        # one line, for a push
 ```
 
-Exits 1 on a quiet day, so a cron line can skip notifying entirely:
+Exits 1 on a quiet day, so a scheduled job can skip notifying entirely.
+`examples/nightly-refresh.sh` is a working runner built around that:
 
 ```cron
-30 5 * * *  /path/to/congress-trades-refresh
+30 5 * * *  /path/to/congress-trades/examples/nightly-refresh.sh
 ```
+
+It collects, prices, re-renders, and always writes a dated note as a local
+record — but runs the LLM and calls your notifier only on a day an alert fired.
+Configure it by environment (`CONGRESS_NOTES`, `ALERT_WINDOW`, `ENV_FILE`, …);
+the headline goes to `NOTIFY_CMD` on stdin, so it carries no home-automation
+details of its own:
+
+```bash
+NOTIFY_CMD='mail -s "Congress trades" you@example.com'
+NOTIFY_CMD='curl -sX POST -d @- https://ntfy.sh/your-topic'
+```
+
+Three orderings in it were learned the hard way and are commented as such:
+publish is only reached if collection succeeded, so a bad night leaves
+yesterday's page rather than replacing it with less; alerts are **read without
+recording** first, because a recording call marks everything seen and the
+headline query would then come back empty; and recording happens last, so a
+crash leaves the backlog intact for the next run instead of swallowing it.
 
 **What it will not alert on:** "a member with a good record just bought X". That
 is the most tempting alert to build, and this project's own numbers say it is
