@@ -43,6 +43,21 @@ Everything is inlined into the output file. There is no server and no API.
 | [Voteview](https://voteview.com/) | roll-call votes, party unity, DW-NOMINATE | none |
 | [Yahoo Finance chart API](https://finance.yahoo.com/) | daily closes, for forward returns | none |
 
+## What you need
+
+Nothing, for almost all of it. No account, no paid feed, no API key:
+
+| | |
+|---|---|
+| House Clerk, Senate eFD, Wikipedia, Voteview, Yahoo prices | no auth at all |
+| `CONGRESS_CONTACT` | **not a key** — your own email, sent in the User-Agent. The SEC answers 403 to anonymous automated clients, so `sectors` and `all` stop with an explanation without it |
+| `CONGRESS_API_KEY` | optional. Only extends committee meetings past the shipped snapshot. Free and instant at [api.congress.gov](https://api.congress.gov/sign-up/) |
+| `CONGRESS_LLM_*` | optional. Only `advise`; point it at any OpenAI-compatible endpoint, including a local one |
+
+So collection, pricing, the scorecard, the backtests, filing lag, committee
+timing, alerts, the rendered page and the MCP server all work with one email
+address and no signup anywhere.
+
 ## Install
 
 ```bash
@@ -286,10 +301,28 @@ testable claim is about **timing**: did the trade land just before a meeting tha
 committee held?
 
 ```bash
-export CONGRESS_API_KEY=...        # free: https://api.congress.gov/sign-up/
-python -m congress_trades committees   # ~9,600 meetings, 2021-2026, ~2h once
-python -m congress_trades timing
+python -m congress_trades timing       # works immediately, no key needed
 ```
+
+**No signup required.** A snapshot of 9,639 meetings (2021-01-06 to 2026-09-29)
+ships in `seed/committee-meetings.json.gz` — 58 KB, public-domain government data.
+`timing` loads it automatically when the table is empty, so a fresh clone can
+answer the question without a key or a two-hour fetch. Titles are omitted
+deliberately: the analysis reads only date, type and committee root, and titles
+were five sixths of the file.
+
+**A key extends it.** Meetings that have already happened are final, so only the
+tail goes stale. With a key, a run fetches just the gap:
+
+```bash
+export CONGRESS_API_KEY=...            # free: https://api.congress.gov/sign-up/
+python -m congress_trades committees   # skips what is stored; 8 fetches, not 9,646
+python -m congress_trades committees --seed     # reload the snapshot, discarding local
+python -m congress_trades committees --export   # rewrite the snapshot from your db
+```
+
+The first full collection is ~2 hours at the API's rate limit, which is exactly
+why the snapshot exists.
 
 9,639 meetings across congresses 117–119 put 15,217 priced trades within 30 days
 of a meeting held by a committee that member sits on. Negative days mean the trade
@@ -317,7 +350,8 @@ all printed with the table rather than left to the reader:
 The before/after split shows nothing at all: 7 days before +0.2%, after +0.2%,
 further out −0.1%, every interval spanning zero.
 
-Why an API key at all: `docs.house.gov`'s calendar redirects to an error page,
+Why the API is the fallback rather than a scrape: `docs.house.gov`'s calendar
+redirects to an error page,
 `senate.gov` publishes only the current week, and govinfo's CHRG sitemaps are
 published transcripts whose coverage collapses recently — 183 packages for 2026
 against ~1,300 for a completed year. Building on that would have meant testing

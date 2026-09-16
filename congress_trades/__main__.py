@@ -95,8 +95,12 @@ def main(argv=None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
-    p = sub.add_parser("committees", help="collect committee meeting dates (needs "
-                       "CONGRESS_API_KEY)")
+    p = sub.add_parser("committees", help="committee meeting dates: top up from the "
+                       "API, or load the shipped snapshot")
+    p.add_argument("--seed", action="store_true",
+                   help="load the committed snapshot instead of fetching (no key)")
+    p.add_argument("--export", action="store_true",
+                   help="rewrite the committed snapshot from the database")
     p.add_argument("--quiet", action="store_true")
 
     p = sub.add_parser("timing", help="do members trade around their own hearings?")
@@ -191,6 +195,10 @@ def main(argv=None) -> int:
             sys.stdout.write(lag.to_markdown(d))
         return 0
     if args.cmd == "committees":
+        if args.export:
+            return committees.export(CONFIG, args.quiet)
+        if args.seed:
+            return committees.seed(CONFIG, force=True, quiet=args.quiet)
         return committees.collect(CONFIG, quiet=args.quiet)
     if args.cmd == "timing":
         if args.selftest:

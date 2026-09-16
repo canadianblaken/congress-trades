@@ -22,14 +22,22 @@ subcommittees' business.
 """
 from __future__ import annotations
 
+import datetime as dt
+import gzip
 import json
 import os
 import time
+from pathlib import Path
 
 import requests
 
 from . import db
 from .config import CONFIG, user_agent
+
+# A snapshot ships with the checkout so `timing` works with no signup at all.
+# Meetings that have already happened never change, so committed history stays
+# correct; only the tail goes stale, and a key tops that up incrementally.
+SEED = Path(__file__).resolve().parent.parent / "seed" / "committee-meetings.json.gz"
 
 API = "https://api.congress.gov/v3/committee-meeting"
 CONGRESSES = (117, 118, 119)          # 2021-2022, 2023-2024, 2025-2026
@@ -111,9 +119,18 @@ def detail(congress: int, chamber: str, event_id: str, cfg=CONFIG) -> dict | Non
 
 def collect(cfg=CONFIG, congresses=CONGRESSES, quiet: bool = False) -> int:
     say = (lambda *_: None) if quiet else print
+    with db.connect(cfg.db_path) as conn:
+        known = {r["event_id"] for r in
+                 conn.execute("SELECT event_id FROM committee_meetings")}
+    if known:
+        say(f"  {len(known)} meetings already stored; fetching only what is new")
     rows = []
     for cg in congresses:
         ids = list_events(cg, cfg, progress=say)
+        # Listing is cheap; detail fetches are not. Skipping ids already stored
+        # turns a re-run into a top-up of the tail instead of the whole history.
+        ids = [e for e in ids if e["eventId"] not in known]
+        say(f"  congress {cg}: {len(ids)} new meetings to fetch")
         for i, ev in enumerate(ids):
             # Sleep only for requests that actually go out. Pausing on cache hits
             # too would make a resumed run cost the same two hours as the first
@@ -145,6 +162,74 @@ def _store(rows, cfg) -> None:
                  r["title"], ",".join(r["roots"])))
 
 
+# ---------------------------------------------------------------- seed / export
+def seed(cfg=CONFIG, force: bool = False, quiet: bool = False) -> int:
+    """Load the committed snapshot into the database.
+
+    Runs automatically when the table is empty, so a fresh clone can answer the
+    timing question without an API key or a two-hour fetch. Existing rows win
+    unless `force`, since a live fetch is always fresher than the snapshot.
+    """
+    if not SEED.exists():
+        if not quiet:
+            print(f"no snapshot at {SEED}")
+        return 1
+    payload = json.loads(gzip.decompress(SEED.read_bytes()))
+    rows = payload["meetings"]
+    with db.connect(cfg.db_path) as conn:
+        have = conn.execute("SELECT count(*) FROM committee_meetings").fetchone()[0]
+        if have and not force:
+            if not quiet:
+                print(f"{have} meetings already stored; snapshot not applied "
+                      "(use --seed to force)")
+            return 0
+        verb = "INSERT OR REPLACE" if force else "INSERT OR IGNORE"
+        for r in rows:
+            conn.execute(
+                f"""{verb} INTO committee_meetings
+                    (event_id, congress, chamber, meeting_date, type, title, roots)
+                    VALUES(?,?,?,?,?,?,?)""",
+                (r["event_id"], r["congress"], r["chamber"], r["date"], r["type"],
+                 r.get("title", ""), ",".join(r["roots"])))
+    if not quiet:
+        print(f"seeded {len(rows)} meetings from the snapshot "
+              f"(as of {payload.get('as_of', 'unknown')}); "
+              "run `committees` with CONGRESS_API_KEY to top up the tail")
+    return 0
+
+
+def export(cfg=CONFIG, quiet: bool = False) -> int:
+    """Rewrite the committed snapshot from the database."""
+    with db.connect(cfg.db_path) as conn:
+        # Titles are omitted deliberately: the analysis reads only date, type and
+        # committee roots, and titles are five sixths of the file. A live fetch
+        # fills them in for anyone who wants them.
+        rows = [{"event_id": r["event_id"], "congress": r["congress"],
+                 "chamber": r["chamber"], "date": r["meeting_date"],
+                 "type": r["type"], "roots": (r["roots"] or "").split(",")}
+                for r in conn.execute(
+                    "SELECT * FROM committee_meetings ORDER BY meeting_date")]
+    if not rows:
+        print("nothing to export")
+        return 1
+    payload = {"as_of": dt.date.today().isoformat(),
+               "source": "https://api.congress.gov/v3/committee-meeting",
+               "note": "US government public-domain data. Held meetings are final; "
+                       "re-run `congress-trades committees` with a key to extend. "
+                       "Titles omitted; the analysis does not use them.",
+               "congresses": sorted({r["congress"] for r in rows}),
+               "span": [rows[0]["date"], rows[-1]["date"]],
+               "meetings": rows}
+    SEED.parent.mkdir(parents=True, exist_ok=True)
+    SEED.write_bytes(gzip.compress(
+        json.dumps(payload, separators=(",", ":")).encode(), 9))
+    if not quiet:
+        print(f"wrote {SEED.name}: {len(rows)} meetings, "
+              f"{SEED.stat().st_size/1024:.0f} KB, span {payload['span'][0]} to "
+              f"{payload['span'][1]}")
+    return 0
+
+
 # ---------------------------------------------------------------- the actual test
 def _member_roots(conn) -> dict[str, set[str]]:
     """member name -> the committee roots they sit on."""
@@ -157,6 +242,18 @@ def _member_roots(conn) -> dict[str, set[str]]:
         if name:
             out.setdefault(name, set()).add((r["key"] or "")[:4].lower())
     return out
+
+
+def ensure_meetings(cfg=CONFIG, quiet: bool = True) -> int:
+    """Number of meetings available, seeding from the snapshot if the table is
+    empty. Called by `timing` so the analysis works on a fresh clone."""
+    with db.connect(cfg.db_path) as conn:
+        have = conn.execute("SELECT count(*) FROM committee_meetings").fetchone()[0]
+    if have:
+        return have
+    seed(cfg, quiet=quiet)
+    with db.connect(cfg.db_path) as conn:
+        return conn.execute("SELECT count(*) FROM committee_meetings").fetchone()[0]
 
 
 def load(floor: int = 1, window: int = 30, cfg=CONFIG):
@@ -283,6 +380,7 @@ def before_vs_after(rows, days: int = 7) -> dict:
 
 
 def build(floor: int = 1, window: int = 30, cfg=CONFIG) -> dict:
+    ensure_meetings(cfg)
     rows, counts = load(floor, window, cfg)
     return {"n": len(rows), "window": window, "coverage": counts,
             "buckets": by_days(rows), "split": before_vs_after(rows),
@@ -367,8 +465,9 @@ def to_markdown(d: dict) -> str:
 def selftest(cfg=CONFIG):
     with db.connect(cfg.db_path) as conn:
         stored = conn.execute("SELECT count(*) FROM committee_meetings").fetchone()[0]
+    stored = stored or ensure_meetings(cfg)
     if not stored:
-        print("selftest skipped: no meetings collected yet "
+        print("selftest skipped: no meetings and no snapshot "
               "(run `congress-trades committees`)")
         return
     rows, counts = load(cfg=cfg)
