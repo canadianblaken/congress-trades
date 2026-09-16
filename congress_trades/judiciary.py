@@ -304,6 +304,11 @@ def parse_judge_courts(rows: list[dict], courts: dict[str, str]) -> dict[int, tu
 
 # ------------------------------------------------------------------- run
 def run(cfg: Config = CONFIG, quiet: bool = False) -> dict:
+    """Fetch the bulk snapshot and store it, returning INGEST counts.
+
+    Unlike the other modules here, run() is the ingest and not the report, so
+    what it returns is not what to_markdown() reads -- pass coverage() to that.
+    """
     disclosures, dropped = parse_disclosures(_fetch_csv(cfg, "disclosures"))
     valid_ids = {d["id"] for d in disclosures}
     investments, orphaned = parse_investments(_fetch_csv(cfg, "investments"), valid_ids)
