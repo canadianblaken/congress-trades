@@ -12,8 +12,9 @@ import json
 import logging
 import sys
 
-from . import (advise, alerts, assets, backtest, committees, compliance,
-               digest, lag, lobbying, pipeline, prices, scorecard)
+from . import (advise, alerts, annual, assets, backtest, committees,
+               compliance, db, digest, finance, lag, lobbying, pipeline,
+               prices, scorecard)
 from .config import CONFIG
 from .publish import render
 
@@ -124,6 +125,23 @@ def main(argv=None) -> int:
 
     p = sub.add_parser("compliance", help="filings that crossed the STOCK Act's "
                        "45-day deadline")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("annual", help="annual disclosures: debts, outside "
+                       "income, holdings and board seats")
+    p.add_argument("--fetch", action="store_true",
+                   help="collect FDR filings from the Clerk before reporting")
+    p.add_argument("--years", help="comma separated, e.g. 2026,2025")
+    p.add_argument("--limit", type=int, default=40,
+                   help="filings per year to fetch; 0 for every one (~430/yr)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("finance", help="committee jurisdiction x PAC money x "
+                       "trades, from FEC bulk data")
+    p.add_argument("--cycles", help="comma separated, e.g. 2026,2024")
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
@@ -263,6 +281,35 @@ def main(argv=None) -> int:
             print(json.dumps(d, indent=2, default=str))
         else:
             sys.stdout.write(compliance.to_markdown(d))
+        return 0
+    if args.cmd == "annual":
+        if args.selftest:
+            annual.selftest(CONFIG)
+            return 0
+        if args.fetch:
+            years = ([y.strip() for y in args.years.split(",") if y.strip()]
+                     if args.years else list(CONFIG.years))
+            data = annual.collect_annual(CONFIG, years, limit=args.limit or None,
+                                         progress=None if args.quiet else print)
+            with db.connect(CONFIG.db_path) as conn:
+                annual.store(conn, data)
+        d = annual.run(CONFIG)
+        if args.json:
+            print(json.dumps(d, indent=2, default=str))
+        else:
+            sys.stdout.write(annual.to_markdown(d))
+        return 0
+    if args.cmd == "finance":
+        if args.selftest:
+            finance.selftest(CONFIG)
+            return 0
+        cycles = (tuple(c.strip() for c in args.cycles.split(",") if c.strip())
+                  if args.cycles else None)
+        d = finance.run(cycles, CONFIG)
+        if args.json:
+            print(json.dumps(d, indent=2, default=str))
+        else:
+            sys.stdout.write(finance.to_markdown(d))
         return 0
     if args.cmd == "lobbying":
         if args.selftest:
