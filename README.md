@@ -35,13 +35,28 @@ Everything is inlined into the output file. There is no server and no API.
 
 | Source | Used for | Auth |
 |---|---|---|
-| [House Clerk](https://disclosures-clerk.house.gov/) | House PTR filings (yearly ZIP + PDFs) | none |
+| [House Clerk](https://disclosures-clerk.house.gov/) | House PTR filings, and the annual FDRs in the same ZIP (debts, outside income, holdings, board seats) | none |
 | [Senate eFD](https://efdsearch.senate.gov/search/home/) | Senate PTR filings | terms handshake |
 | [unitedstates/congress-legislators](https://github.com/unitedstates/congress-legislators) | member identity, party, seat, committees | none |
 | [Wikipedia REST](https://en.wikipedia.org/api/rest_v1/) | biography and portrait | none |
 | [SEC EDGAR](https://www.sec.gov/) | ticker → SIC industry classification | contact in User-Agent |
 | [Voteview](https://voteview.com/) | roll-call votes, party unity, DW-NOMINATE | none |
 | [Yahoo Finance chart API](https://finance.yahoo.com/) | daily closes, for forward returns | none |
+| [FEC bulk data](https://www.fec.gov/data/browse-data/?tab=bulk-data) | candidate identity, receipts, PAC contributions | none |
+| [lda.gov](https://lda.gov/api/v1/filings/) | LD-2 quarterly lobbying disclosures | none |
+| [CourtListener bulk snapshots](https://storage.courtlistener.com/bulk-data/) | federal judges' financial disclosures | none |
+
+Two sources are deliberately **absent**, both for the same reason — there is no
+lawful automated path to them, and this project does not manufacture one:
+
+- **Federal tax returns.** Not public for members of Congress. No source exists.
+- **Executive branch OGE Form 278e**, and the judiciary's own CETA database at
+  `pub.jefs.uscourts.gov`. The former is request-only. The latter requires a
+  fresh identity registration on every visit behind a reCAPTCHA, so the judicial
+  data here comes from CourtListener's sanctioned bulk snapshots instead — which
+  is also why it stops in 2022 (see `judiciary.py`). CourtListener's own site is
+  not crawled: its robots.txt disallows automated agents and points them at the
+  bulk data, which is what this reads.
 
 ## What you need
 
@@ -124,6 +139,11 @@ python -m congress_trades committees            # committee meeting dates (needs
 python -m congress_trades timing                # do they trade around their hearings?
 python -m congress_trades alerts                # only what crossed a bar since last run
 python -m congress_trades mix                   # who is trading and who is parking
+python -m congress_trades compliance            # filings past the STOCK Act's 45-day deadline
+python -m congress_trades annual --fetch        # annual reports: debts, outside income, board seats
+python -m congress_trades finance               # committee jurisdiction x PAC money x trades
+python -m congress_trades lobbying --fetch      # LDA filings against the sectors members trade
+python -m congress_trades judiciary --fetch     # federal judges' disclosed holdings
 python -m congress_trades advise                # send that brief to an LLM
 ```
 

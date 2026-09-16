@@ -13,8 +13,8 @@ import logging
 import sys
 
 from . import (advise, alerts, annual, assets, backtest, committees,
-               compliance, db, digest, finance, lag, lobbying, pipeline,
-               prices, scorecard)
+               compliance, db, digest, finance, judiciary, lag, lobbying,
+               pipeline, prices, scorecard)
 from .config import CONFIG
 from .publish import render
 
@@ -135,6 +135,14 @@ def main(argv=None) -> int:
     p.add_argument("--years", help="comma separated, e.g. 2026,2025")
     p.add_argument("--limit", type=int, default=40,
                    help="filings per year to fetch; 0 for every one (~430/yr)")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("judiciary", help="federal judges' disclosed holdings "
+                       "(CETA bulk snapshot)")
+    p.add_argument("--fetch", action="store_true",
+                   help="download and store the bulk snapshot before reporting")
     p.add_argument("--json", action="store_true")
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--selftest", action="store_true")
@@ -298,6 +306,19 @@ def main(argv=None) -> int:
             print(json.dumps(d, indent=2, default=str))
         else:
             sys.stdout.write(annual.to_markdown(d))
+        return 0
+    if args.cmd == "judiciary":
+        if args.selftest:
+            judiciary.selftest(CONFIG)
+            return 0
+        if args.fetch:
+            judiciary.run(CONFIG, quiet=args.quiet)
+        # run() is the ingest; the report reads coverage().
+        d = judiciary.coverage(CONFIG)
+        if args.json:
+            print(json.dumps(d, indent=2, default=str))
+        else:
+            sys.stdout.write(judiciary.to_markdown(d))
         return 0
     if args.cmd == "finance":
         if args.selftest:
