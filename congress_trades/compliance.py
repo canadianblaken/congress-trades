@@ -9,9 +9,22 @@ on the filing, not a finding of wrongdoing. Whether the $200 fee was assessed or
 waived is not public, so this cannot report violations or penalties—only late
 filings.
 
-Source data contains real garbage: a notification date of 03/28/1935 has been
-observed. Negative lags or lags of many thousands of days indicate bad source
-data rather than spectacular violations and are excluded or separately flagged.
+Source data contains real garbage, and it is worth being precise about its shape,
+because the obvious guard against it throws away the findings that matter most.
+The junk is hand-typed year typos in the PDF transaction column -- 2202, 2220,
+3031, and the 03/28/1935 that has been seen -- and every one of them lands the
+transaction AFTER its own disclosure. So a negative lag is the garbage signature,
+and excluding negative lags is sufficient to remove all 18 of them.
+
+A large POSITIVE lag is not garbage. The tail runs smoothly from 1,100 to 2,379
+days with no gap to cut at, and the rows in it are real: Richard W. Allen
+disclosed a run of 2017 transactions in a single 2023 filing. A ceiling anywhere
+in that range silently deletes exactly the filings this module exists to surface.
+
+One interpretive caveat the dates cannot carry on their own: a member elected
+mid-stream files for transactions predating their service, so their first filing
+can show a multi-year lag without anything having been filed late. Jefferson
+Shreve's 3,698 days is that, not a violation.
 """
 from __future__ import annotations
 
@@ -22,7 +35,6 @@ from . import db
 from .config import CONFIG
 
 STATUTORY_DAYS = 45
-MAX_SANE_LAG = 1095  # ~3 years; beyond this signals bad data
 
 
 def load(cfg=CONFIG):
@@ -44,8 +56,9 @@ def load(cfg=CONFIG):
             dropped += 1
             continue
 
-        # Flag and exclude absurd data.
-        if lag < 0 or lag > MAX_SANE_LAG:
+        # A transaction cannot postdate its own disclosure. That is the whole
+        # garbage signature here; there is no upper bound worth imposing.
+        if lag < 0:
             dropped += 1
             continue
 
@@ -143,7 +156,8 @@ def to_markdown(d: dict) -> str:
         f"{d['total_trades']:,} trades with both transaction and disclosure dates. "
         f"{d['total_late']:,} ({d['total_late'] * 100 / d['total_trades']:.1f}%) "
         "exceed the 45-day window."
-        + (f" {d['dropped']} rows with unparseable or absurd dates were excluded."
+        + (f" {d['dropped']} rows were excluded for disclosing a transaction "
+           "before it happened, which is a typo rather than a filing."
            if d["dropped"] else ""),
         "",
         "## Members by late-filing count",
@@ -181,9 +195,19 @@ def to_markdown(d: dict) -> str:
         "",
         "## Data quality notes",
         "",
-        "- Negative lags and lags exceeding ~3 years indicate unparseable or "
-        "nonsensical source dates (e.g., a notification date of 03/28/1935) and "
-        "are excluded.",
+        "- Only negative lags are excluded. Hand-typed year typos in the PDF "
+        "transaction column (2202, 2220, 3031, and the 03/28/1935 that has been "
+        "seen) all place the transaction after its own disclosure, so that one "
+        "rule removes them. No upper bound is imposed: the tail above three "
+        "years is smooth and real, and capping it would delete the longest "
+        "delays, which are the rows most worth seeing.",
+        "- A member elected mid-stream files for transactions predating their "
+        "service, so a multi-year lag on their first filing is not a late "
+        "filing. Check whether a member at the top of this table is new.",
+        "- 'amount late' sums the LOWER bound of each disclosed bracket, so it "
+        "is a floor and understates by construction. A member filing 140 trades "
+        "in the smallest bracket shows $140,140, which is 140 x $1,001 and not "
+        "a portfolio value.",
         "- Filing dates come from the Clerk's index, not hand-typed PDF columns.",
         "- This measure cannot detect violations: only whether a filing crossed "
         "the 45-day threshold.",
@@ -199,7 +223,7 @@ def selftest(cfg=CONFIG):
 
     # Check lag calculations.
     for r in rows:
-        assert 0 <= r["lag"] <= MAX_SANE_LAG, f"insane lag {r['lag']}"
+        assert r["lag"] >= 0, f"negative lag survived the filter: {r['lag']}"
         try:
             tx = dt.date.fromisoformat(r["tx_date"])
             dis = dt.date.fromisoformat(r["disclosed"])

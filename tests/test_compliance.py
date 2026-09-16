@@ -5,8 +5,7 @@ Covers day-counting logic with specific boundary cases:
   - exactly 45 days is NOT late
   - 46 days IS late
   - 1 day lag is never late
-  - negative lag (bad data) is excluded
-  - lags > MAX_SANE_LAG are excluded
+  - negative lag (a typo'd year) is excluded, and nothing else is
 
   python3 tests/test_compliance.py
 """
@@ -45,15 +44,13 @@ lag_0 = (dis_date_0 - tx_date_0).days
 assert lag_0 == 0, f"expected 0 days, got {lag_0}"
 assert lag_0 <= compliance.STATUTORY_DAYS, "0 days should NOT be flagged as late"
 
-# Test 5: Negative lag would be marked for exclusion in the load() function.
-# (negative means disclosed before transaction, which is bad data)
-assert compliance.MAX_SANE_LAG > 0, "MAX_SANE_LAG must be positive"
+# Test 5: there is no upper bound on lag. A ceiling anywhere in the multi-year
+# tail deletes real filings -- Richard W. Allen disclosed 2017 transactions in a
+# single 2023 filing -- so guard against one being reintroduced.
+assert not hasattr(compliance, "MAX_SANE_LAG"), \
+    "an upper lag bound is back; it silently drops the longest real delays"
 
-# Test 6: MAX_SANE_LAG boundary: at the limit should not be excluded.
-assert compliance.MAX_SANE_LAG == 1095, "expected MAX_SANE_LAG = 1095"
-# Beyond MAX_SANE_LAG is excluded in load().
-
-# Test 7: Load function excludes bad data.
+# Test 6: Load function excludes bad data.
 # We can't construct fixture rows without a database, so test against the real DB.
 from congress_trades.config import CONFIG
 
@@ -64,9 +61,13 @@ assert dropped >= 0, "dropped count must be non-negative"
 # All loaded rows must have valid lags.
 for r in rows:
     assert r["lag"] >= 0, f"negative lag: {r}"
-    assert r["lag"] <= compliance.MAX_SANE_LAG, f"absurd lag: {r['lag']}"
 
-# Test 8: is_late classification is correct.
+# The multi-year tail must survive the filter, or the module is hiding its
+# own most significant rows.
+assert max(r["lag"] for r in rows) > 2000, \
+    "longest delays were filtered out; they are real and are the point"
+
+# Test 7: is_late classification is correct.
 for r in rows:
     expected_late = r["lag"] > compliance.STATUTORY_DAYS
     assert r["is_late"] == expected_late, \
