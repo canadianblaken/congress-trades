@@ -1,5 +1,7 @@
-"""SQLite storage. Five tables: the disclosures themselves, who the filers are,
-their committee seats, an industry label per ticker, and forward price returns."""
+"""SQLite storage. The core tables: the disclosures themselves, who the filers are,
+their committee seats, an industry label per ticker, and forward price returns.
+Later additions (committee meetings, FEC campaign finance) are appended below,
+each documented where it's declared rather than up here."""
 from __future__ import annotations
 
 import sqlite3
@@ -108,6 +110,46 @@ CREATE TABLE IF NOT EXISTS ticker_sectors (
     sector     TEXT,
     updated_at TEXT
 );
+
+-- FEC campaign-finance cross-reference (bulk downloads, no API key -- see
+-- congress_trades/finance.py). cand_id is FEC's own id, not bioguide; bioguide
+-- is filled in only where finance.match_candidate found an unambiguous match,
+-- and match_method records why every unmatched row was left unmatched.
+CREATE TABLE IF NOT EXISTS fec_candidates (
+    cand_id      TEXT NOT NULL,
+    cycle        TEXT NOT NULL,       -- FEC 2-year cycle, e.g. '2026'
+    cand_name    TEXT,                -- 'LAST, FIRST MIDDLE' as FEC files it
+    office       TEXT,                -- H | S
+    state        TEXT,
+    district     TEXT,
+    party        TEXT,
+    ttl_receipts REAL,                -- weball TTL_RECEIPTS
+    pac_receipts REAL,                -- weball OTHER_POL_CMTE_CONTRIB: PAC money only
+    bioguide     TEXT,                -- '' when unmatched
+    match_method TEXT,                -- 'matched' | the reason it was not
+    PRIMARY KEY (cand_id, cycle)
+);
+CREATE INDEX IF NOT EXISTS idx_fc_bioguide ON fec_candidates(bioguide);
+
+CREATE TABLE IF NOT EXISTS fec_committees (
+    cmte_id       TEXT PRIMARY KEY,
+    name          TEXT,
+    connected_org TEXT,
+    cmte_type     TEXT,
+    sector_guess  TEXT                -- '' when no keyword hit -- see PAC_SECTOR_KEYWORDS
+);
+
+CREATE TABLE IF NOT EXISTS fec_pac_contributions (
+    cycle    TEXT NOT NULL,
+    cmte_id  TEXT NOT NULL,
+    cand_id  TEXT NOT NULL,
+    amount   REAL,                    -- sum of Schedule B 24K contributions, the cycle
+    n_tx     INTEGER,
+    first_dt TEXT,
+    last_dt  TEXT,
+    PRIMARY KEY (cycle, cmte_id, cand_id)
+);
+CREATE INDEX IF NOT EXISTS idx_fpc_cand ON fec_pac_contributions(cand_id, cycle);
 """
 
 
