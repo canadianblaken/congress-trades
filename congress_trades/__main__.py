@@ -13,7 +13,7 @@ import logging
 import sys
 
 from . import (advise, alerts, assets, backtest, committees, compliance,
-               digest, lag, pipeline, prices, scorecard)
+               digest, lag, lobbying, pipeline, prices, scorecard)
 from .config import CONFIG
 from .publish import render
 
@@ -125,6 +125,18 @@ def main(argv=None) -> int:
     p = sub.add_parser("compliance", help="filings that crossed the STOCK Act's "
                        "45-day deadline")
     p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("lobbying", help="LDA lobbying disclosures against the "
+                       "sectors members trade")
+    p.add_argument("--fetch", action="store_true",
+                   help="pull a quarter from lda.gov before reporting")
+    p.add_argument("--year", type=int, default=0)
+    p.add_argument("--period", choices=("first_quarter", "second_quarter",
+                                        "third_quarter", "fourth_quarter"))
+    p.add_argument("--max-filings", type=int, default=500)
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--quiet", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
     p = sub.add_parser("mix", help="asset mix: who is trading and who is parking")
@@ -251,6 +263,19 @@ def main(argv=None) -> int:
             print(json.dumps(d, indent=2, default=str))
         else:
             sys.stdout.write(compliance.to_markdown(d))
+        return 0
+    if args.cmd == "lobbying":
+        if args.selftest:
+            lobbying.selftest(CONFIG)
+            return 0
+        if args.fetch:
+            lobbying.run(CONFIG, args.year or None, args.period,
+                         args.max_filings, args.quiet)
+        d = lobbying.build(CONFIG, args.year or None, args.period)
+        if args.json:
+            print(json.dumps(d, indent=2, default=str))
+        else:
+            sys.stdout.write(lobbying.to_markdown(d))
         return 0
     if args.cmd == "mix":
         if args.selftest:
