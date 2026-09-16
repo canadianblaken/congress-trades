@@ -237,6 +237,21 @@ def all_sectors(conn: sqlite3.Connection) -> dict[str, dict]:
     return {r["ticker"]: dict(r) for r in conn.execute("SELECT * FROM ticker_sectors")}
 
 
+def member_medians(conn: sqlite3.Connection, floor: int) -> dict[str, float]:
+    """Each member's own median disclosed amount, over their whole history and
+    above `floor`. One definition, so 'unusual for them' means the same thing
+    everywhere it's quoted -- digest's lone-large multiplier and alerts' bar
+    used to compute this two different ways and disagreed by an order of
+    magnitude on the same trade."""
+    by: dict[str, list[float]] = {}
+    for r in conn.execute(
+            "SELECT member, amount_min FROM congress_trades "
+            "WHERE ticker != '' AND amount_min >= ?", (floor,)):
+        by.setdefault(r["member"], []).append(r["amount_min"])
+    import statistics
+    return {m: statistics.median(v) for m, v in by.items() if v}
+
+
 def untagged_tickers(conn: sqlite3.Connection, limit: int = 0) -> list[str]:
     q = """SELECT t.ticker FROM congress_trades t
            LEFT JOIN ticker_sectors s ON s.ticker = t.ticker

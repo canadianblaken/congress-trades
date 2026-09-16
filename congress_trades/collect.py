@@ -335,6 +335,16 @@ def _iso(d: str) -> str:
     return ""
 
 
+_HONORIFIC = re.compile(r"\b(?:Mr|Mrs|Ms|Dr|Rev|Hon)\.?\s+")
+
+
+def clean_member_name(name: str) -> str:
+    """The Clerk's index occasionally embeds an honorific in First or Last
+    ('Scott' + 'Mr Franklin' -> 'Scott Mr Franklin'), which then reads as a
+    second, distinct member everywhere the name is used as a key. Strip it."""
+    return _HONORIFIC.sub("", name or "").strip()
+
+
 def normalize(rows: list[dict], min_amount: int) -> list[dict]:
     """Apply the disclosure-bracket floor and ISO-ify dates. Untickered assets are kept
     (they still belong on a member's timeline); ticker rollups skip them."""
@@ -345,5 +355,6 @@ def normalize(rows: list[dict], min_amount: int) -> list[dict]:
         tx_date = _iso(r.get("tx_date", ""))
         if not tx_date:
             continue
-        out.append({**r, "tx_date": tx_date, "disclosed": _iso(r.get("disclosed", ""))})
+        out.append({**r, "member": clean_member_name(r.get("member", "")),
+                    "tx_date": tx_date, "disclosed": _iso(r.get("disclosed", ""))})
     return out

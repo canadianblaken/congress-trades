@@ -81,15 +81,10 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
                 WHERE t.ticker != ''
                   AND COALESCE(NULLIF(t.disclosed,''), t.tx_date) >= ?""", (since,))]
 
-        # Each member's own typical size, over their whole history, so "unusual"
-        # means unusual for them rather than merely large.
-        med: dict[str, float] = {}
-        for r in conn.execute(
-                """SELECT member, amount_min FROM congress_trades
-                    WHERE ticker != '' AND amount_min > 0"""):
-            med.setdefault(r["member"], []).append(r["amount_min"])
-        import statistics
-        med = {k: statistics.median(v) for k, v in med.items() if v}
+        # Each member's own typical size, over their whole history, above the
+        # same floor digest.lone_large uses -- so a trade's "Nx their median"
+        # reads the same figure whether it came from an alert or the digest.
+        med = db.member_medians(conn, CONFIG.default_floor)
 
         seats = db.committees_by_member(conn)
         bio = {r["member"]: r["bioguide"] for r in conn.execute(

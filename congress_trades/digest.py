@@ -28,6 +28,7 @@ def load(days: int, floor: int, cfg=CONFIG):
         seats = db.committees_by_member(conn)
         sectors = {r["ticker"]: dict(r) for r in
                    conn.execute("SELECT * FROM ticker_sectors")}
+        medians = db.member_medians(conn, floor)
         rows = [dict(r) for r in conn.execute(
             """SELECT t.*, r.ret_30, r.ret_90, r.ret_now,
                         r.bench_30, r.bench_90, r.bench_now
@@ -36,7 +37,7 @@ def load(days: int, floor: int, cfg=CONFIG):
                 WHERE t.ticker != '' AND t.amount_min >= ?
                   AND COALESCE(NULLIF(t.disclosed,''), t.tx_date) >= ?""",
             (floor, since))]
-    return rows, members, seats, sectors, since
+    return rows, members, seats, sectors, since, medians
 
 
 def scored_alpha(r: dict, horizon: str = "90") -> float | None:
@@ -48,8 +49,12 @@ def scored_alpha(r: dict, horizon: str = "90") -> float | None:
 
 
 def convergence(rows, limit=20):
+    # 90d is the scored horizon everywhere else, but this table is meant to
+    # cover *recent* convergence -- disclosures inside the last 90 days can't
+    # have a matured 90d return yet, so 90d alone reads as blank for exactly
+    # the rows this table exists to show. 30d matures inside the window.
     by = defaultdict(lambda: {"buys": 0, "sells": 0, "members": set(), "max": 0,
-                              "rets": []})
+                              "rets": [], "rets30": []})
     for r in rows:
         o = by[r["ticker"]]
         o["buys" if r["tx_type"] == "buy" else "sells"] += 1
@@ -58,9 +63,13 @@ def convergence(rows, limit=20):
         d = scored_alpha(r)
         if d is not None:
             o["rets"].append(d)
+        d30 = scored_alpha(r, "30")
+        if d30 is not None:
+            o["rets30"].append(d30)
     out = [{"t": t, "n": len(o["members"]), "net": o["buys"] - o["sells"],
-            "med": statistics.median(o["rets"]) if o["rets"] else None, **o}
-           for t, o in by.items()]
+            "med": statistics.median(o["rets"]) if o["rets"] else None,
+            "med30": statistics.median(o["rets30"]) if o["rets30"] else None,
+            **o} for t, o in by.items()]
     out.sort(key=lambda o: (-o["n"], -abs(o["net"]), -o["max"]))
     return out[:limit]
 
@@ -77,13 +86,11 @@ def sector_flow(rows, sectors, limit=12):
     return out[:limit]
 
 
-def lone_large(rows, min_amount=100001, limit=12):
+def lone_large(rows, medians, min_amount=100001, limit=12):
     """The opposite signal to convergence, which by construction hides the bet
-    nobody else is in. 'Large' is judged against that member's own median trade,
-    so it means unusual for them rather than large in absolute terms."""
-    per_member = defaultdict(list)
-    for r in rows:
-        per_member[r["member"]].append(r["amount_min"] or 0)
+    nobody else is in. 'Large' is judged against that member's own median trade
+    -- the same db.member_medians figure alerts.py uses for its 'unusual' bar,
+    so the multiplier on a given trade reads the same in both places."""
     by = defaultdict(lambda: {"members": set(), "best": None})
     for r in rows:
         o = by[r["ticker"]]
@@ -94,7 +101,7 @@ def lone_large(rows, min_amount=100001, limit=12):
     for t, o in by.items():
         if len(o["members"]) != 1 or (o["best"]["amount_min"] or 0) < min_amount:
             continue
-        med = statistics.median(per_member[o["best"]["member"]]) or 1
+        med = medians.get(o["best"]["member"]) or 1
         out.append({"t": t, "r": o["best"], "mult": (o["best"]["amount_min"] or 0) / med})
     out.sort(key=lambda o: (-(o["r"]["amount_min"] or 0), -o["mult"]))
     return out[:limit]
@@ -127,7 +134,7 @@ def pct(x):
 
 
 def build(days=90, floor=15001, cfg=CONFIG) -> dict:
-    rows, members, seats, sectors, since = load(days, floor, cfg)
+    rows, members, seats, sectors, since, medians = load(days, floor, cfg)
     return {
         "since": since, "days": days, "floor": floor,
         "disclosures": len(rows),
@@ -135,7 +142,7 @@ def build(days=90, floor=15001, cfg=CONFIG) -> dict:
         "priced": sum(1 for r in rows if r.get("ret_now") is not None),
         "convergence": convergence(rows),
         "sectors": sector_flow(rows, sectors),
-        "lone_large": lone_large(rows),
+        "lone_large": lone_large(rows, medians),
         "committee_overlap": committee_overlap(rows, members, seats, sectors),
         "scorecard": (sc := scorecard.members(floor, "90", cfg=cfg))[:15],
         "persistence": scorecard.persistence(sc),
@@ -164,11 +171,11 @@ def to_markdown(d: dict) -> str:
          "- Many disclosures are spouse-directed or index funds the filer never chose.", ""]
 
     L += ["## Convergence — most distinct members on one name",
-          "| ticker | members | net | largest | sector | median 90d |",
-          "|---|--:|--:|--:|---|--:|"]
+          "| ticker | members | net | largest | sector | median 30d | median 90d |",
+          "|---|--:|--:|--:|---|--:|--:|"]
     for o in d["convergence"]:
         L.append(f"| {o['t']} | {o['n']} | {o['net']:+d} | {money(o['max'])} "
-                 f"| {sec.get(o['t'],'?')} | {pct(o['med'])} |")
+                 f"| {sec.get(o['t'],'?')} | {pct(o['med30'])} | {pct(o['med'])} |")
 
     L += ["", "## Sector net flow (buys − sells)",
           "| sector | net | buys | sells | names |", "|---|--:|--:|--:|--:|"]
@@ -177,13 +184,13 @@ def to_markdown(d: dict) -> str:
                  f"| {len(o['tickers'])} |")
 
     L += ["", "## Lone large positions — one member, nobody else",
-          "| ticker | member | type | amount | × their median | disclosed | 90d α |",
-          "|---|---|---|--:|--:|---|--:|"]
+          "| ticker | member | type | amount | × their median | disclosed | 30d α | 90d α |",
+          "|---|---|---|--:|--:|---|--:|--:|"]
     for o in d["lone_large"]:
         r = o["r"]
         L.append(f"| {o['t']} | {r['member']} | {r['tx_type']} | {money(r['amount_min'])} "
                  f"| {o['mult']:.0f}× | {r['disclosed']} "
-                 f"| {pct(scored_alpha(r))} |")
+                 f"| {pct(scored_alpha(r, '30'))} | {pct(scored_alpha(r))} |")
 
     L += ["", f"## Committee overlap — traded a sector their committee oversees "
               f"({len(d['committee_overlap'])} shown)",
@@ -231,13 +238,13 @@ def to_markdown(d: dict) -> str:
 
 
 def selftest(cfg=CONFIG):
-    rows, members, seats, sectors, _ = load(3650, 1, cfg)
+    rows, members, seats, sectors, _, medians = load(3650, 1, cfg)
     assert rows, "no rows loaded from congress.db"
     conv = convergence(rows)
     assert [o["n"] for o in conv] == sorted((o["n"] for o in conv), reverse=True), \
         "convergence not ranked by distinct member count"
     assert all(len(o["members"]) == o["n"] for o in conv), "member count mismatch"
-    assert all(o["r"]["ticker"] == o["t"] for o in lone_large(rows))
+    assert all(o["r"]["ticker"] == o["t"] for o in lone_large(rows, medians))
     assert scored_alpha({"tx_type": "sell", "ret_90": -0.1, "bench_90": 0.05}) == 0.15000000000000002 \
         or abs(scored_alpha({"tx_type": "sell", "ret_90": -0.1, "bench_90": 0.05}) - 0.15) < 1e-9
     assert scored_alpha({"tx_type": "sell", "ret_90": None, "bench_90": 0.05}) is None
