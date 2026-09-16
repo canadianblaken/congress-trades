@@ -12,8 +12,8 @@ import json
 import logging
 import sys
 
-from . import (advise, alerts, assets, backtest, committees, digest,
-               lag, pipeline, prices, scorecard)
+from . import (advise, alerts, assets, backtest, committees, compliance,
+               digest, lag, pipeline, prices, scorecard)
 from .config import CONFIG
 from .publish import render
 
@@ -121,6 +121,11 @@ def main(argv=None) -> int:
                        "dropped from the asset name")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--quiet", action="store_true")
+
+    p = sub.add_parser("compliance", help="filings that crossed the STOCK Act's "
+                       "45-day deadline")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
 
     p = sub.add_parser("mix", help="asset mix: who is trading and who is parking")
     p.add_argument("--floor", type=int, default=0)
@@ -237,6 +242,16 @@ def main(argv=None) -> int:
         return 0 if found else 1
     if args.cmd == "repair-tickers":
         return assets.repair_tickers(CONFIG, args.dry_run, args.quiet)
+    if args.cmd == "compliance":
+        if args.selftest:
+            compliance.selftest(CONFIG)
+            return 0
+        d = compliance.build(CONFIG)
+        if args.json:
+            print(json.dumps(d, indent=2, default=str))
+        else:
+            sys.stdout.write(compliance.to_markdown(d))
+        return 0
     if args.cmd == "mix":
         if args.selftest:
             assets.selftest(CONFIG)
