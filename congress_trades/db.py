@@ -108,6 +108,65 @@ CREATE TABLE IF NOT EXISTS ticker_sectors (
     sector     TEXT,
     updated_at TEXT
 );
+
+-- Annual Financial Disclosure Reports (see annual.py). A separate filing
+-- stream from congress_trades: FilingType O/A/C/T/H rather than P, and keyed
+-- by doc_id alone since one FDR carries many schedules' worth of rows, each
+-- keyed (doc_id, row_idx) against it.
+CREATE TABLE IF NOT EXISTS annual_filings (
+    doc_id       TEXT PRIMARY KEY,
+    member       TEXT NOT NULL,
+    state        TEXT,
+    filing_type  TEXT NOT NULL,      -- O | A | C | T | H
+    year         TEXT,
+    filed        TEXT,               -- ISO date
+    doc_url      TEXT,
+    first_seen   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_af_member ON annual_filings(member);
+
+CREATE TABLE IF NOT EXISTS annual_liabilities (
+    doc_id         TEXT NOT NULL,
+    row_idx        INTEGER NOT NULL,
+    owner          TEXT,             -- Self | Spouse | Joint | Dependent
+    creditor       TEXT,
+    date_incurred  TEXT,             -- as disclosed -- the form has no fixed date format
+    liability_type TEXT,
+    amount_min     INTEGER,          -- lower bound of the disclosed bracket
+    amount_range   TEXT,
+    UNIQUE(doc_id, row_idx)
+);
+
+CREATE TABLE IF NOT EXISTS annual_earned_income (
+    doc_id      TEXT NOT NULL,
+    row_idx     INTEGER NOT NULL,
+    source      TEXT,
+    income_type TEXT,
+    amount      TEXT,                -- as disclosed: an exact dollar figure, or "N/A"
+    amount_val  REAL,                -- parsed numeric; NULL for "N/A" rows
+    UNIQUE(doc_id, row_idx)
+);
+
+CREATE TABLE IF NOT EXISTS annual_assets (
+    doc_id       TEXT NOT NULL,
+    row_idx      INTEGER NOT NULL,
+    asset_name   TEXT,
+    owner        TEXT,
+    value_min    INTEGER,            -- NULL for "Undetermined" (e.g. defined-benefit pensions)
+    value_range  TEXT,
+    income_type  TEXT,               -- Dividends | Interest | Rent | Tax-Deferred | None | ...
+    income_min   INTEGER,
+    income_range TEXT,
+    UNIQUE(doc_id, row_idx)
+);
+
+CREATE TABLE IF NOT EXISTS annual_positions (
+    doc_id       TEXT NOT NULL,
+    row_idx      INTEGER NOT NULL,
+    position     TEXT,
+    organization TEXT,
+    UNIQUE(doc_id, row_idx)
+);
 """
 
 
@@ -235,6 +294,52 @@ def upsert_sector(conn: sqlite3.Connection, rec: dict) -> None:
 
 def all_sectors(conn: sqlite3.Connection) -> dict[str, dict]:
     return {r["ticker"]: dict(r) for r in conn.execute("SELECT * FROM ticker_sectors")}
+
+
+# ---------------------------------------------------------- annual FDRs
+def upsert_annual_filings(conn: sqlite3.Connection, rows: list[dict]) -> int:
+    now = utcnow()
+    new = 0
+    for r in rows:
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO annual_filings
+               (doc_id, member, state, filing_type, year, filed, doc_url, first_seen)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (r["doc_id"], r.get("member"), r.get("state"), r.get("filing_type"),
+             r.get("year"), r.get("filed").isoformat() if hasattr(r.get("filed"), "isoformat")
+             else r.get("filed"), r.get("doc_url"), now))
+        new += cur.rowcount
+    return new
+
+
+# Column lists per schedule table -- upsert_annual_rows uses these to build
+# one parameterized INSERT rather than repeating near-identical SQL four times.
+_ANNUAL_COLS = {
+    "annual_liabilities": ("owner", "creditor", "date_incurred", "liability_type",
+                          "amount_min", "amount_range"),
+    "annual_earned_income": ("source", "income_type", "amount", "amount_val"),
+    "annual_assets": ("asset_name", "owner", "value_min", "value_range",
+                      "income_type", "income_min", "income_range"),
+    "annual_positions": ("position", "organization"),
+}
+
+
+def upsert_annual_rows(conn: sqlite3.Connection, table: str, rows: list[dict]) -> int:
+    """Insert schedule rows, keyed (doc_id, row_idx) like congress_trades --
+    row_idx is the row's position within its schedule as parsed, so a parser
+    change means rebuilding the table, not merging into it."""
+    cols = _ANNUAL_COLS[table]
+    per_doc: dict[str, int] = {}
+    new = 0
+    for r in rows:
+        idx = per_doc.get(r["doc_id"], 0)
+        per_doc[r["doc_id"]] = idx + 1
+        cur = conn.execute(
+            f"""INSERT OR IGNORE INTO {table} (doc_id, row_idx, {', '.join(cols)})
+                VALUES(?,?,{', '.join('?' * len(cols))})""",
+            (r["doc_id"], idx, *[r.get(c) for c in cols]))
+        new += cur.rowcount
+    return new
 
 
 def untagged_tickers(conn: sqlite3.Connection, limit: int = 0) -> list[str]:
