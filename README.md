@@ -106,6 +106,7 @@ python -m congress_trades backtest              # would following them have paid
 python -m congress_trades lag                   # alpha by how late it was disclosed
 python -m congress_trades committees            # committee meeting dates (needs a key)
 python -m congress_trades timing                # do they trade around their hearings?
+python -m congress_trades alerts                # only what crossed a bar since last run
 python -m congress_trades advise                # send that brief to an LLM
 ```
 
@@ -322,6 +323,49 @@ published transcripts whose coverage collapses recently — 183 packages for 202
 against ~1,300 for a completed year. Building on that would have meant testing
 timing on a sample biased toward older trades.
 
+## Alerts — speak only when something crosses a bar
+
+```bash
+python -m congress_trades alerts                   # marks what it emits as seen
+python -m congress_trades alerts --dry-run         # look without recording
+python -m congress_trades alerts --headline        # one line, for a push
+```
+
+Exits 1 on a quiet day, so a cron line can skip notifying entirely:
+
+```cron
+30 5 * * *  /path/to/congress-trades-refresh
+```
+
+**What it will not alert on:** "a member with a good record just bought X". That
+is the most tempting alert to build, and this project's own numbers say it is
+noise — member alpha does not persist (r = −0.09) and top-ranked members
+underperformed a follow-everyone baseline in four of five walk-forward years. An
+alert on a track record would be dressing that up as a signal.
+
+The bars are things the data supports, or that are simply facts:
+
+| bar | why |
+|---|---|
+| **$500k+** | fires on size alone, rare enough to be worth it |
+| **10× the member's own median** (and ≥ $50k) | unusual *for them*, not merely large |
+| **$100k+ in their own committee's sector** | a fact about jurisdiction, not evidence |
+| **4+ members on one name in 30 days** | convergence; re-fires only when the count rises |
+
+Being filed promptly (≤15 days) or merely being $100k+ **annotates** an alert but
+never raises one. The first version made freshness a trigger and produced five
+alerts a day — most filings are prompt, so freshness says a disclosure is worth
+*looking at*, not that it is remarkable. Likewise a 10× multiple means nothing if
+a member's median trade sits at the reporting floor, hence the absolute floor
+alongside it.
+
+Every alert fires once; fingerprints live in the database, so re-running on the
+same day is silent and this is safe on a timer. A member's same-day disclosures
+are grouped in the output — one filing can carry twenty qualifying transactions
+and printing each buries everything else — while fingerprints stay per-trade so
+nothing is missed. Over six years of filings this averages well under one alert a
+day.
+
 ## An MCP server, for agents
 
 ```bash
@@ -481,6 +525,7 @@ python -m congress_trades scorecard --selftest   # alpha signs, ranking, concent
 python -m congress_trades backtest --selftest    # no-lookahead + CI sanity
 python -m congress_trades lag --selftest         # bucket partition + sane lags
 python -m congress_trades timing --selftest      # widening correction + buckets
+python -m congress_trades alerts --selftest      # idempotence + no qualifier-only fires
 python -c 'from congress_trades import mcp_server; mcp_server.selftest()'
 ```
 

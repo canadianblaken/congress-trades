@@ -83,6 +83,11 @@ CREATE TABLE IF NOT EXISTS trade_returns (
     updated_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS alerts_seen (
+    fingerprint TEXT PRIMARY KEY,      -- one row per alert already emitted
+    first_seen  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS committee_meetings (
     event_id     TEXT PRIMARY KEY,
     congress     INTEGER,

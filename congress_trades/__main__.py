@@ -12,8 +12,8 @@ import json
 import logging
 import sys
 
-from . import (advise, backtest, committees, digest, lag, pipeline,
-               prices, scorecard)
+from . import (advise, alerts, backtest, committees, digest, lag,
+               pipeline, prices, scorecard)
 from .config import CONFIG
 from .publish import render
 
@@ -102,6 +102,14 @@ def main(argv=None) -> int:
     p = sub.add_parser("timing", help="do members trade around their own hearings?")
     p.add_argument("--floor", type=int, default=1)
     p.add_argument("--window", type=int, default=30)
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("alerts", help="only what crossed a bar since last run")
+    p.add_argument("--days", type=int, default=14)
+    p.add_argument("--dry-run", action="store_true",
+                   help="look without marking anything as seen")
+    p.add_argument("--headline", action="store_true", help="one line, for a push")
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
@@ -194,6 +202,21 @@ def main(argv=None) -> int:
         else:
             sys.stdout.write(committees.to_markdown(d))
         return 0
+    if args.cmd == "alerts":
+        if args.selftest:
+            alerts.selftest(CONFIG)
+            return 0
+        found = alerts.find(args.days, CONFIG, record=not args.dry_run)
+        if args.json:
+            print(json.dumps(found, indent=2, default=str))
+        elif args.headline:
+            h = alerts.headline(found)
+            if h:
+                print(h)
+        else:
+            sys.stdout.write(alerts.to_text(found, args.days))
+        # Exit 1 on a quiet day, so a cron line can skip notifying at all.
+        return 0 if found else 1
     if args.cmd == "advise":
         return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)
     if args.cmd == "publish":
