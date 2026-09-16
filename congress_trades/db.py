@@ -108,6 +108,45 @@ CREATE TABLE IF NOT EXISTS ticker_sectors (
     sector     TEXT,
     updated_at TEXT
 );
+
+-- One LD-2 quarterly report per row. filing_uuid is the LDA's own primary key and
+-- is immutable once posted (an amendment is a NEW filing_uuid, not an edit of this
+-- one), so re-ingestion is a pure overwrite, not a merge.
+CREATE TABLE IF NOT EXISTS lobbying_filings (
+    filing_uuid    TEXT PRIMARY KEY,
+    filing_type    TEXT,              -- Q1..Q4 report/amendment/termination code
+    filing_type_display TEXT,
+    filing_period  TEXT,              -- first_quarter .. fourth_quarter
+    filing_year    INTEGER,
+    client_name    TEXT,
+    client_id      INTEGER,
+    client_state   TEXT,
+    client_desc    TEXT,              -- the client's own one-line business description
+    registrant_id  INTEGER,
+    registrant_name TEXT,             -- the lobbying firm/entity that filed
+    income         REAL,              -- WHOLE-FILING total; not attributable to one issue
+    expenses       REAL,
+    dt_posted      TEXT,
+    doc_url        TEXT,
+    first_seen     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lf_period ON lobbying_filings(filing_year, filing_period);
+CREATE INDEX IF NOT EXISTS idx_lf_client ON lobbying_filings(client_name);
+
+-- One row per issue area within a filing (a filing lists several). This is where
+-- the government_entities (chambers/agencies lobbied) and the fixed issue-code
+-- vocabulary live. NEVER stores a specific member -- LD-2 filings don't name one.
+CREATE TABLE IF NOT EXISTS lobbying_activities (
+    filing_uuid  TEXT NOT NULL,
+    activity_idx INTEGER NOT NULL,    -- position within the filing's activity list
+    issue_code   TEXT,                -- fixed LDA vocabulary, e.g. TAX, HCR, DEF
+    issue_desc   TEXT,
+    description  TEXT,                -- free text; may name a bill, never a member
+    chambers     TEXT,                -- comma-separated subset of House/Senate lobbied
+    agencies     TEXT,                -- comma-separated other government entities lobbied
+    PRIMARY KEY (filing_uuid, activity_idx)
+);
+CREATE INDEX IF NOT EXISTS idx_la_issue ON lobbying_activities(issue_code);
 """
 
 
@@ -260,3 +299,44 @@ def untagged_tickers(conn: sqlite3.Connection, limit: int = 0) -> list[str]:
     if limit:
         q += f" LIMIT {int(limit)}"
     return [r[0] for r in conn.execute(q).fetchall()]
+
+
+# ---------------------------------------------------------------- lobbying (LDA)
+def upsert_lobbying_filing(conn: sqlite3.Connection, filing: dict) -> None:
+    """Overwrite rather than merge, like `replace_committees` -- filings are
+    immutable once posted, so a re-fetch always agrees with what's stored."""
+    conn.execute(
+        """INSERT INTO lobbying_filings
+             (filing_uuid, filing_type, filing_type_display, filing_period, filing_year,
+              client_name, client_id, client_state, client_desc, registrant_id,
+              registrant_name, income, expenses, dt_posted, doc_url, first_seen)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(filing_uuid) DO UPDATE SET
+             filing_type=excluded.filing_type, filing_type_display=excluded.filing_type_display,
+             filing_period=excluded.filing_period, filing_year=excluded.filing_year,
+             client_name=excluded.client_name, client_id=excluded.client_id,
+             client_state=excluded.client_state, client_desc=excluded.client_desc,
+             registrant_id=excluded.registrant_id, registrant_name=excluded.registrant_name,
+             income=excluded.income, expenses=excluded.expenses,
+             dt_posted=excluded.dt_posted, doc_url=excluded.doc_url""",
+        (filing["filing_uuid"], filing["filing_type"], filing["filing_type_display"],
+         filing["filing_period"], filing["filing_year"], filing["client_name"],
+         filing["client_id"], filing["client_state"], filing["client_desc"],
+         filing["registrant_id"], filing["registrant_name"], filing["income"],
+         filing["expenses"], filing["dt_posted"], filing["doc_url"], utcnow()))
+
+
+def replace_lobbying_activities(conn: sqlite3.Connection, filing_uuid: str,
+                                 activities: list[dict]) -> None:
+    conn.execute("DELETE FROM lobbying_activities WHERE filing_uuid=?", (filing_uuid,))
+    conn.executemany(
+        """INSERT INTO lobbying_activities
+             (filing_uuid, activity_idx, issue_code, issue_desc, description,
+              chambers, agencies)
+           VALUES (?,?,?,?,?,?,?)""",
+        [(a["filing_uuid"], a["activity_idx"], a["issue_code"], a["issue_desc"],
+          a["description"], a["chambers"], a["agencies"]) for a in activities])
+
+
+def lobbying_filing_count(conn: sqlite3.Connection) -> int:
+    return conn.execute("SELECT count(*) FROM lobbying_filings").fetchone()[0]
