@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from . import db, legislators
+from . import db, legislators, scorecard
 from .config import CONFIG
 
 FRESH_DAYS = 15          # qualifier: the lag band that carried alpha
@@ -185,6 +185,8 @@ def to_text(alerts: list[dict], days: int = 14) -> str:
                 L.append(f"    - …and {len(items)-4} more")
     if conv:
         L += ["", "## Converging names", ""] + [f"- {a['line']}" for a in conv]
+    ps = scorecard.persistence(scorecard.members(CONFIG.default_floor, cfg=CONFIG))
+    r_text = f"r = {ps['r']:+.2f}" if ps["r"] is not None else "not enough members to say"
     L += ["",
           f"Bars: {money(HUGE)}+, {UNUSUAL_MULT}x the member's own median (and at "
           f"least {money(UNUSUAL_FLOOR)}), a {money(BIG)}+ trade in their own "
@@ -193,7 +195,7 @@ def to_text(alerts: list[dict], days: int = 14) -> str:
           "annotates an alert but never raises one.",
           "",
           "Deliberately not a bar: the filer's track record. Member alpha does not "
-          "persist in this data (r = -0.09), so an alert on a good record would be "
+          f"persist in this data ({r_text}), so an alert on a good record would be "
           "noise wearing a signal's clothes."]
     return "\n".join(L) + "\n"
 
