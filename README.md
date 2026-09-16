@@ -113,6 +113,7 @@ python -m congress_trades enrich                # resolve members, bios, committ
 python -m congress_trades enrich --rotate 20    # re-check only the 20 stalest
 python -m congress_trades sectors               # SEC industry classification
 python -m congress_trades votes                 # party unity + DW-NOMINATE
+python -m congress_trades repair-tickers        # recover tickers the parser dropped
 python -m congress_trades prices                # forward returns per disclosure
 python -m congress_trades publish               # render the page
 python -m congress_trades digest                # prompt-sized brief of the trends
@@ -122,6 +123,7 @@ python -m congress_trades lag                   # alpha by how late it was discl
 python -m congress_trades committees            # committee meeting dates (needs a key)
 python -m congress_trades timing                # do they trade around their hearings?
 python -m congress_trades alerts                # only what crossed a bar since last run
+python -m congress_trades mix                   # who is trading and who is parking
 python -m congress_trades advise                # send that brief to an LLM
 ```
 
@@ -167,10 +169,10 @@ semiconductors through a semiconductor rally beats SPY without having chosen
 anything, but against SOXX the same trades read flat.
 
 The gap between the two columns is where most of the apparent skill lives. Across
-the 65 scored members, the median record is **+1.22% vs the index but only +0.43%
-vs sector** — roughly two thirds of the edge is sector exposure, not selection. 29
-of the 44 positive members shrink when measured against their own sector, and 9 go
-from positive to zero-or-negative: they rode the sector outright.
+the 72 scored members, the median record is **+1.22% vs the index but only +0.54%
+vs sector** — over half the edge is sector exposure, not selection. Most positive
+members shrink when measured against their own sector, and several go from
+positive to zero-or-negative: they rode the sector outright.
 
 The sector mapping (`SECTOR_ETF` in `prices.py`) is a judgement call, not a
 definition — these labels are SIC rollups and some buckets straddle two ETFs.
@@ -194,6 +196,48 @@ set is dominated by a few prolific filers, amounts are brackets, and a median
 across trades is not a portfolio return. `MIN_TRADES` is enforced because below
 about ten measurable trades a "record" is one lucky quarter.
 
+## What is actually being disclosed
+
+```bash
+python -m congress_trades mix
+python -m congress_trades repair-tickers --dry-run
+```
+
+Of 33,128 disclosures, **27,424 resolve to a listed equity** and 5,704 genuinely
+do not. The remainder is worth naming rather than discarding — a member whose
+filings are mostly Treasuries is parking money, and no alpha figure conveys that:
+
+| class | share |
+|---|--:|
+| Listed equity | 82.8% |
+| Government & municipal debt | ~3% |
+| Treasuries, cash & money market | ~3% |
+| Corporate debt, structured notes | ~1% |
+| Partnerships, private & pre-IPO, hedge funds | ~2% |
+| Options, crypto, funds, real estate | ~2% |
+| Other / unlabelled | ~6% |
+
+**4,506 of those were equities all along.** The Clerk's newer template writes
+"Apple Inc. - Common Stock (AAPL)" with no asset-type code after the ticker, and
+the original pattern required one, so thousands of ordinary trades were stored
+untickered and filtered out of every analysis. `pdftotext` also renders some
+capitals in lower case — "(bLK)", "(CAg)", "(TSlA)" — which defeated a
+case-sensitive match. Recovering them raised measurable trades 19%, and every
+number in this README moved as a result.
+
+Nothing is invented. A recovered candidate is accepted only if it matches a
+ticker already evidenced by EDGAR or another filing, or — for symbols never seen
+before — only if a price series actually exists for it. Of 301 unseen candidates,
+249 were real and 52 were rejected.
+
+Classification uses the filings' own taxonomy rather than keyword guesses:
+`[ST]` stock, `[GS]` government and municipal, `[OP]` options, `[CT]` crypto,
+`[PS]` private equity, `[HN]` hedge fund. That matters because municipal debt is
+written "Los Angeles CA GO UTX [GS]", which no amount of matching on "general
+obligation" will catch. The specific codes are authoritative; the broad ones
+(`[CS]`, `[OT]`) yield to name patterns, since `[CS]` covers both a Goldman
+medium-term note and a money-market fund.
+
 ## Does any of it work?
 
 Three checks, because a ranking that cannot be falsified is a horoscope.
@@ -209,14 +253,14 @@ own history and the newer half separately. The scoreboard shows both.
 
 **2. Ask whether the halves agree.** Across members, the rank correlation between
 first-half and second-half alpha is the single most useful number this project
-produces. On six years of filings (65 members with a scoreable record) it comes
-out at **r = −0.09**, with only 43% of members keeping the same sign — worse than
-a coin flip. A member's past alpha says nothing about their next trade, and if
-anything points mildly the wrong way. The page says so above the table rather
-than in a footnote.
+produces. On six years of filings (72 members with a scoreable record) it comes
+out at **r = −0.06**, with 53% of members keeping the same sign — a coin flip. A
+member's past alpha says nothing about their next trade. The page says so above
+the table rather than in a footnote.
 
-Collecting more years made this finding *stronger*, not weaker: on 18 months it
-was r = +0.03 across 29 members.
+It has been near zero at every data size: r = +0.03 on 18 months and 29 members,
+−0.09 on six years and 65, −0.06 after recovering 4,500 mis-parsed trades and
+reaching 72.
 
 **3. Concentration.** One member near the top of the alpha ranking has 89% of
 their scored trades in a single bitcoin ETF. That is one bet with a sample size of
@@ -242,11 +286,24 @@ observations. On six years the naive interval calls "every disclosure" a
 significant +0.8% (+0.3% to +1.2%); clustered by month, the same number reads
 −0.0% to +1.5% and the result evaporates. Same for the bottom-members row.
 
-**On six years of filings, no strategy tested has a clustered interval that misses
-zero** — not following everyone, not member selection, not buys, not
-sells-as-shorts. Worse for the ranking: the top-selected members *underperformed*
-the naive follow-everyone baseline in four of five folds. That is what r = −0.09
-looks like in practice.
+**One strategy clears zero, and it is the one that selects nothing.** Pooled over
+five walk-forward years, following *every* disclosure returns **+0.85%** per
+90-day position with a clustered interval of **[+0.07%, +1.59%]** on 4,214
+positions. It holds at a 30-day horizon too: +0.45% [+0.10%, +0.78%]. Earlier,
+with 19% less data, the same figure read [−0.0%, +1.5%] and did not clear.
+
+Read it at its true size before getting excited. It is a mean per position, not a
+compounded return; there are no costs, slippage or taxes in it; the beat rate is
+54%, barely off a coin flip; and per fold it is positive in only three of five
+years, leaning on 2025 (+1.73%, the largest fold) with 2022 and 2026 negative.
+What it describes is owning a slice of everything Congress discloses — closer to
+a broad diversified tilt than to a stock-picking edge, and roughly what the
+public congressional-trading ETFs already do.
+
+**Member selection still adds nothing.** Top-ranked members pool to +1.0% with an
+interval spanning zero, their buys are worse than their sells, and the bottom-
+ranked row is not reliably worse either. That is what r = −0.06 looks like in
+practice: the aggregate carries a little, the ranking carries none.
 
 Caveats the code states rather than hides: a sell is only actionable as a short and
 shorting is not frictionless (no borrow costs or availability modelled, so those
@@ -268,14 +325,17 @@ clustered interval:**
 
 | filing lag | disclosures | median α vs index | 90% by month | |
 |---|--:|--:|:--:|---|
-| 0–15 days | 3,591 | **+1.06%** | +0.58% to +1.97% | significant |
-| 16–30 days | 7,684 | −0.08% | −0.62% to +0.31% | |
-| 31–45 days | 5,340 | +0.61% | −0.08% to +1.13% | |
-| 46–90 days | 783 | −0.82% | −2.77% to +0.55% | |
-| 91–365 days | 1,279 | **−1.75%** | −2.23% to −0.42% | significant |
+| 0–15 days | 4,362 | **+0.8%** | +0.4% to +1.7% | significant |
+| 16–30 days | 9,144 | +0.0% | −0.5% to +0.4% | |
+| 31–45 days | 6,350 | **+0.7%** | +0.1% to +1.3% | |
+| 46–90 days | 982 | −0.6% | −2.0% to +0.3% | |
+| 91–365 days | 1,566 | **−1.7%** | −2.0% to −0.5% | significant |
+| 366+ days | 1,380 | +0.0% | −2.5% to +0.2% | |
 
-Within 45 days: **+0.33%** [+0.04%, +0.71%]. Past 45 days: **−0.63%** [−2.03%,
-−0.35%]. Opposite signs, both significant.
+Within 45 days: **+0.4%** [+0.1%, +0.8%]. Past 45 days: **−0.6%** [−1.7%, −0.4%].
+Opposite signs, both significant. Note the 16–30 day bucket is flat while both
+neighbours are positive — a non-monotone shape that argues against reading a
+clean mechanism into the gradient.
 
 Read the mechanism before reading skill into it. Every return is measured from the
 **disclosure** date, so a trade filed a year after execution is scored on the stock
@@ -324,7 +384,7 @@ python -m congress_trades committees --export   # rewrite the snapshot from your
 The first full collection is ~2 hours at the API's rate limit, which is exactly
 why the snapshot exists.
 
-9,639 meetings across congresses 117–119 put 15,217 priced trades within 30 days
+9,644 meetings across congresses 117–119 put 17,965 priced trades within 30 days
 of a meeting held by a committee that member sits on. Negative days mean the trade
 came *before* the meeting.
 
@@ -392,7 +452,7 @@ crash leaves the backlog intact for the next run instead of swallowing it.
 
 **What it will not alert on:** "a member with a good record just bought X". That
 is the most tempting alert to build, and this project's own numbers say it is
-noise — member alpha does not persist (r = −0.09) and top-ranked members
+noise — member alpha does not persist (r = −0.06) and top-ranked members
 underperformed a follow-everyone baseline in four of five walk-forward years. An
 alert on a track record would be dressing that up as a signal.
 
@@ -579,6 +639,7 @@ python -m congress_trades backtest --selftest    # no-lookahead + CI sanity
 python -m congress_trades lag --selftest         # bucket partition + sane lags
 python -m congress_trades timing --selftest      # widening correction + buckets
 python -m congress_trades alerts --selftest      # idempotence + no qualifier-only fires
+python -m congress_trades mix --selftest         # class partition + no invented tickers
 python -c 'from congress_trades import mcp_server; mcp_server.selftest()'
 ```
 

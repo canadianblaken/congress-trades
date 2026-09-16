@@ -12,8 +12,8 @@ import json
 import logging
 import sys
 
-from . import (advise, alerts, backtest, committees, digest, lag,
-               pipeline, prices, scorecard)
+from . import (advise, alerts, assets, backtest, committees, digest,
+               lag, pipeline, prices, scorecard)
 from .config import CONFIG
 from .publish import render
 
@@ -114,6 +114,16 @@ def main(argv=None) -> int:
     p.add_argument("--dry-run", action="store_true",
                    help="look without marking anything as seen")
     p.add_argument("--headline", action="store_true", help="one line, for a push")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("repair-tickers", help="recover tickers an older parser "
+                       "dropped from the asset name")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+
+    p = sub.add_parser("mix", help="asset mix: who is trading and who is parking")
+    p.add_argument("--floor", type=int, default=0)
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
@@ -225,12 +235,25 @@ def main(argv=None) -> int:
             sys.stdout.write(alerts.to_text(found, args.days))
         # Exit 1 on a quiet day, so a cron line can skip notifying at all.
         return 0 if found else 1
+    if args.cmd == "repair-tickers":
+        return assets.repair_tickers(CONFIG, args.dry_run, args.quiet)
+    if args.cmd == "mix":
+        if args.selftest:
+            assets.selftest(CONFIG)
+            return 0
+        d = assets.mix(args.floor, CONFIG)
+        if args.json:
+            print(json.dumps(d, indent=2, default=list))
+        else:
+            sys.stdout.write(assets.to_markdown(d))
+        return 0
     if args.cmd == "advise":
         return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)
     if args.cmd == "publish":
         return render(CONFIG)
     if args.cmd == "all":
         for rc in (pipeline.backfill(CONFIG, quiet=args.quiet),
+                   assets.repair_tickers(CONFIG, quiet=args.quiet),
                    pipeline.enrich(CONFIG, rotate=args.rotate, quiet=args.quiet),
                    pipeline.tag_sectors(CONFIG, quiet=args.quiet),
                    pipeline.score_votes(CONFIG),

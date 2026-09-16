@@ -40,7 +40,53 @@ TIMEOUT = 30
 # --- House PDF layout -------------------------------------------------------------
 # "P  07/24/2026 07/24/2026" -- type letter then transaction date then notification date.
 _H_TYPE = re.compile(r"\b([PS])\b(?:\s*\(partial\))?\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})")
-_H_TICKER = re.compile(r"\(([A-Z][A-Z.\-]{0,6})\)\s*\[")
+# The original form: a ticker in parentheses followed by an asset-type code,
+# e.g. "Apple Inc. (AAPL) [ST]". High confidence, so it is tried first.
+_H_TICKER = re.compile(r"\(([A-Za-z][A-Za-z.\-]{0,6})\)\s*\[")
+# The same thing without the type code -- "Apple Inc. - Common Stock (AAPL)" --
+# which the Clerk's newer PDF template emits and the old pattern silently dropped.
+_H_TICKER_BARE = re.compile(r"\(([A-Za-z]{1,5}(?:\.[A-Za-z]{1,2})?)\)")
+
+# Words that sit in parentheses and are not tickers. pdftotext also renders some
+# capitals in lower case -- "(bLK)", "(CAg)", "(TSlA)" -- so matching is
+# case-insensitive and the result is upper-cased, which means these have to be
+# excluded by name rather than by case.
+_NOT_TICKERS = {
+    "NYSE", "NASDAQ", "AMEX", "OTC", "ADR", "ADS", "ETF", "REIT", "LLC", "LP",
+    "LLP", "INC", "CORP", "CO", "USD", "EUR", "CLASS", "COMMON", "STOCK", "FUND",
+    "TRUST", "PLC", "NV", "SA", "AG", "AB", "SE", "IRA", "JR", "SR", "II", "III",
+}
+
+
+def ticker_from_name(name: str, known: set[str] | None = None) -> str:
+    """Pull a ticker out of an asset name, or return "".
+
+    One definition, two callers: the House parser uses it while reading filings,
+    and `repair_tickers` uses it to recover rows an older parser dropped. Two
+    copies of this logic would drift, and the recovered rows have to match the
+    freshly parsed ones exactly or the same holding gets scored two ways.
+
+    `known` restricts results to tickers already seen from EDGAR or elsewhere in
+    the data; a wrong ticker on a real disclosure is worse than no ticker, since
+    it would be priced and scored as another company. Call with known=None to
+    get the raw candidate and validate it yourself -- `repair_tickers` does that
+    by asking whether a price series exists, which is the only real evidence.
+    """
+    if not name:
+        return ""
+    m = _H_TICKER.search(name) or None
+    if not m:
+        # Several may match ("(A) (AAPL)"); the ticker is conventionally last.
+        found = _H_TICKER_BARE.findall(name)
+        cand = found[-1] if found else ""
+    else:
+        cand = m.group(1)
+    cand = cand.upper().strip(".-")
+    if not cand or cand in _NOT_TICKERS:
+        return ""
+    if known is not None and cand not in known:
+        return ""
+    return cand
 _H_OWNER = re.compile(r"^\s*(SP|JT|DC)\b")
 _MONEY = re.compile(r"\$([\d,]+)")
 
@@ -89,12 +135,14 @@ def parse_house_ptr(text: str) -> list[dict]:
         # asset name = the head line minus its owner code, whitespace collapsed
         name = re.sub(r"^\s*(SP|JT|DC)\b", "", head).strip()
         name = re.sub(r"\s{2,}", " ", name.splitlines()[0] if name else "").strip()
-        tick = _H_TICKER.search(block)
+        # Read from the head line, not the whole block: the tail holds amount
+        # brackets and dates that can carry their own parentheses.
+        tick = ticker_from_name(name) or ticker_from_name(block)
         tail = block[kind.end():]
         rows.append({
             "owner": {"SP": "Spouse", "JT": "Joint", "DC": "Dependent"}.get(
                 owner.group(1) if owner else "", "Self"),
-            "ticker": tick.group(1) if tick else "",
+            "ticker": tick,
             "asset_name": name[:160],
             "tx_type": "buy" if kind.group(1) == "P" else "sell",
             "tx_date": kind.group(2),

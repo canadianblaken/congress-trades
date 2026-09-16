@@ -57,8 +57,13 @@ def _ci_clustered(pairs: list[tuple], iters: int = 2000, seed: int = 0,
     the same few weeks and ride the same market, so a plain bootstrap treats one
     regime as hundreds of observations and reports an interval far too narrow.
     Resampling months keeps the trades inside a month together, which is the
-    honest unit of information. Expect this interval to be several times wider
-    than the naive one -- and believe this one.
+    honest unit of information, and it is the interval significance is decided
+    on here.
+
+    It is not automatically wider. Where a month's trades disagree with each
+    other, holding them together can shrink the interval rather than widen it --
+    the point is that the naive version assumes an independence these positions
+    do not have, not that clustering always reads more cautious.
 
     ponytail: months are a crude cluster. Overlapping 90-day holds still correlate
     across adjacent months; a block bootstrap over quarters would be stricter
@@ -307,7 +312,19 @@ def selftest(cfg=CONFIG):
     for name, v in d["strategies"].items():
         if v["lo"] is not None:
             assert v["lo"] <= v["mean"] <= v["hi"], f"{name}: mean outside its own CI"
-            assert v["sig"] == (v["lo"] > 0 or v["hi"] < 0)
+        # Significance is decided by the CLUSTERED interval, not the naive one.
+        # This assertion checked `lo`/`hi` until the two disagreed on real data,
+        # at which point it was testing a contract that no longer existed.
+        if v["clo"] is not None:
+            assert v["clo"] <= v["mean"] <= v["chi"], \
+                f"{name}: mean outside its clustered CI"
+            assert v["sig"] == (v["clo"] > 0 or v["chi"] < 0), \
+                f"{name}: sig disagrees with the clustered interval"
+            # NOT asserted: that the clustered interval is wider. They are
+            # different estimators, and when most variance sits within months
+            # rather than between them, resampling months can narrow it. The
+            # reason to prefer it is that the naive interval assumes independence
+            # these positions do not have -- not that it always reads wider.
     txt = to_markdown(d)
     assert "trained before" in txt and "beat index" in txt
 
