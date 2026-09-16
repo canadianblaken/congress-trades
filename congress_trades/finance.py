@@ -417,6 +417,18 @@ def run(cycles: tuple[str, ...] | None = None, cfg=CONFIG) -> dict:
         roster_matched = conn.execute(
             f"SELECT count(DISTINCT bioguide) FROM fec_candidates "
             f"WHERE bioguide != '' AND cycle IN ({qmarks})", cycles).fetchone()[0]
+        # How much of the PAC money the keyword heuristic can actually see. This
+        # governs how the whole table reads: a member appearing here took money
+        # this module could label, but a member NOT appearing may simply have
+        # taken money from PACs it cannot label, which is most of them.
+        cov_n, cov_lab = conn.execute(
+            "SELECT count(*), sum(sector_guess != '' AND sector_guess IS NOT NULL) "
+            "FROM fec_committees").fetchone()
+        cov_amt = conn.execute(
+            f"SELECT sum(p.amount), sum(CASE WHEN f.sector_guess != '' AND "
+            f"f.sector_guess IS NOT NULL THEN p.amount ELSE 0 END) "
+            f"FROM fec_pac_contributions p JOIN fec_committees f "
+            f"ON f.cmte_id = p.cmte_id WHERE p.cycle IN ({qmarks})", cycles).fetchone()
         # PAC share of receipts, among matched members with a usable denominator --
         # the "PAC money is a minority of most members' receipts" caveat, measured
         # rather than asserted.
@@ -453,6 +465,8 @@ def run(cycles: tuple[str, ...] | None = None, cfg=CONFIG) -> dict:
                   "rate": (matched / total) if total else None,
                   "roster_n": roster_n, "roster_matched": roster_matched,
                   "roster_rate": (roster_matched / roster_n) if roster_n else None},
+        "coverage": {"cmte_n": cov_n or 0, "cmte_labelled": cov_lab or 0,
+                     "amt_total": cov_amt[0] or 0.0, "amt_labelled": cov_amt[1] or 0.0},
         "pac_share_of_receipts": statistics.median(shares) if shares else None,
         "pac_share_n": len(shares),
         "members_with_jurisdiction": with_jur,
@@ -488,7 +502,21 @@ def to_markdown(d: dict) -> str:
          f"those, {d['members_with_pac_in_jurisdiction']} took PAC money from a "
          f"committee this module's keyword heuristic labels as that same sector, "
          f"and {d['members_trading_in_jurisdiction']} traded a stock in it. "
-         f"**{len(d['overlaps'])} members hit all three.**", ""]
+         f"**{len(d['overlaps'])} members hit all three.**", "",
+         (lambda c:
+          "**The keyword heuristic sees a minority of the money, so read this "
+          "table in one direction only.** It labels "
+          f"{c['cmte_labelled']:,} of {c['cmte_n']:,} PAC committees "
+          f"({c['cmte_labelled']*100/c['cmte_n']:.1f}%), carrying "
+          f"{_usd(c['amt_labelled'])} of {_usd(c['amt_total'])} in contributions "
+          f"({c['amt_labelled']*100/c['amt_total']:.0f}%). Industry PACs that name "
+          "their trade ('bankers', 'realtors', 'farm bureau') are caught; "
+          "leadership PACs, single-company PACs and anything named after a person "
+          "or an acronym are not. So a member IN this table took money this module "
+          "could label -- but a member's ABSENCE from it is close to meaningless, "
+          "because most PAC money is unlabelled. Absence is not evidence of "
+          "not taking industry money."
+          )(d["coverage"]) if d.get("coverage", {}).get("cmte_n") else "", ""]
 
     if d["pac_share_of_receipts"] is not None:
         L += [f"Among {d['pac_share_n']} matched candidates with usable receipt "
