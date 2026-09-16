@@ -38,7 +38,7 @@ from __future__ import annotations
 
 import datetime as dt
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import requests
 
@@ -247,11 +247,13 @@ def sector_summary(filings: dict, activities: list[dict]) -> list[dict]:
     across the filing's issues -- see the module docstring)."""
     by_sector: dict[str, dict] = defaultdict(
         lambda: {"activities": 0, "clients": set(), "filings": set(),
-                 "income": 0.0, "house": 0, "senate": 0})
+                 "income": 0.0, "house": 0, "senate": 0,
+                 "codes": Counter()})
     for a in activities:
         for sec in sectors_for_issue(a["issue_code"]):
             o = by_sector[sec]
             o["activities"] += 1
+            o["codes"][a["issue_code"]] += 1
             fu = a["filing_uuid"]
             f = filings.get(fu)
             if f:
@@ -266,7 +268,11 @@ def sector_summary(filings: dict, activities: list[dict]) -> list[dict]:
                 o["senate"] += 1
     out = [{"sector": s, "activities": v["activities"], "clients": len(v["clients"]),
             "filings": len(v["filings"]), "income": v["income"],
-            "house": v["house"], "senate": v["senate"]}
+            "house": v["house"], "senate": v["senate"],
+            # Which issue codes produced this row. 21 of 37 mapped codes name
+            # more than one sector, so without this a reader cannot tell that
+            # the top row is mostly DEF and HCR arriving from elsewhere.
+            "codes": [c for c, _ in v["codes"].most_common(3)]}
            for s, v in by_sector.items()]
     out.sort(key=lambda o: -o["income"])
     return out
@@ -314,15 +320,29 @@ def to_markdown(d: dict) -> str:
          f"~80-code vocabulary, exactly like the committee -> sector map -- "
          f"{d['unmapped_activities']:,} of {d['activities']:,} activities use a "
          "code this module does not roll up and are excluded below.", "",
-         "| sector | lobbying activities | clients | filings | income "
-         "(1x/filing) | House | Senate | member trades (net) |",
-         "|---|--:|--:|--:|--:|--:|--:|--:|"]
+         "| sector | from codes | lobbying activities | clients | filings "
+         "| income (1x/filing) | House | Senate | member trades (net) |",
+         "|---|---|--:|--:|--:|--:|--:|--:|--:|"]
     for o in d["sectors"]:
-        L.append(f"| {o['sector']} | {o['activities']:,} | {o['clients']:,} "
+        L.append(f"| {o['sector']} | {' '.join(o.get('codes') or []) or '—'} "
+                 f"| {o['activities']:,} | {o['clients']:,} "
                  f"| {o['filings']:,} | {money(o['income'])} | {o['house']:,} "
                  f"| {o['senate']:,} | {o['member_net']:+d} "
                  f"({o['member_trades']:,} trades) |")
     L += ["",
+          "**This table double-counts on purpose, and the 'from codes' column "
+          "is how you see it.** 21 of the 37 mapped issue codes name more than "
+          "one sector -- `DEF` alone lands on Transportation Equipment, "
+          "Electronics and Instruments & Medical Devices, and `HCR` on three "
+          "more -- so one activity is counted in every sector its code touches. "
+          "The columns therefore sum to well above the totals in the line at "
+          "the top, and a row is not independent evidence from the rows sharing "
+          "its codes. Rows with identical figures are the same code arriving "
+          "twice. Splitting a filing's income across its issues would mean "
+          "inventing a division the filer never reported, so the choice is "
+          "between visible double-counting and a fabricated split; this is the "
+          "former.",
+          "",
           "**'member trades' is NOT evidence of anything about this lobbying.** "
           "It is the same disclosed-trade count this project already computes "
           "per sector (all history, no date match to these filings), placed "
