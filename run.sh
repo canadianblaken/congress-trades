@@ -7,6 +7,17 @@
 #   ./run.sh portal               live portal at http://127.0.0.1:8777
 #   ./run.sh portal stop          stop a running portal (or use its Stop button)
 #
+# The model-backed commands, which need CONGRESS_LLM_PROVIDER and a model set in
+# .env (see .env.example), and are never part of `all` because they cost time and
+# tokens that a nightly refresh should not spend without being asked:
+#
+#   ./run.sh llm                  check the model: reachable, honours a schema?
+#   ./run.sh resolve --dry-run    label the untickered assets, write nothing
+#   ./run.sh resolve --apply      ...and write the verified tickers into trades
+#   ./run.sh topics --stage fetch --since 2025-01-01   meeting titles (needs a key)
+#   ./run.sh topics --stage tag                        tag those titles by industry
+#   ./run.sh timing --sector-matched                   the narrower timing arm
+#
 # Linux and macOS both. Nothing below needs bash 4 -- macOS still ships 3.2 as
 # /bin/bash -- and the two tools that exist only on Linux, flock and xdg-open,
 # have fallbacks further down rather than being skipped silently.
@@ -26,8 +37,28 @@ set -uo pipefail
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 cd "$HERE" || exit 1
 
-# shellcheck disable=SC1091
-[ -r "$HERE/.env" ] && { set -a; . "$HERE/.env"; set +a; }
+# Fill in only what the shell has not already set. The header above promises
+# that anything exported wins, and `set -a; . .env` did the exact opposite --
+# so `FOO=x ./run.sh` could not override the file. congress_trades/config.py
+# applies the same rule, so the wrapper and `python -m congress_trades` now
+# behave identically for the same .env.
+if [ -r "$HERE/.env" ]; then
+  while IFS= read -r line || [ -n "$line" ]; do
+    case $line in ''|'#'*) continue ;; esac
+    line=${line#export }
+    key=${line%%=*}
+    val=${line#*=}
+    key=$(printf '%s' "$key" | tr -d '[:space:]')
+    case $key in ''|*[!A-Za-z0-9_]*|[0-9]*) continue ;; esac
+    # One matched pair of quotes comes off; an unquoted value keeps any '#',
+    # since tokens and URL fragments contain them.
+    case $val in
+      \"*\") val=${val#\"}; val=${val%\"} ;;
+      \'*\') val=${val#\'}; val=${val%\'} ;;
+    esac
+    [ -z "${!key:-}" ] && export "$key=$val"
+  done < "$HERE/.env"
+fi
 
 # No address is baked in here: it would end up in git history. Put yours in a
 # .env beside this script (it is gitignored), or export it before calling.
@@ -110,7 +141,10 @@ take_lock() {
 run_locked() {
   local sub=$1
   shift
-  case " digest scorecard backtest lag timing mix advise " in
+  # `llm` only talks to the model endpoint, and `advise` only reads. `resolve`
+  # and `topics` are deliberately absent: both write to the database, so both
+  # belong behind the same lock as collection.
+  case " digest scorecard backtest lag timing mix advise llm " in
     *" $sub "*) "$PY" -m congress_trades "$@" ; return $? ;;
   esac
   take_lock

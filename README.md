@@ -31,6 +31,9 @@ one page you can open in a browser:
 
 Everything is inlined into the output file. There is no server and no API.
 
+There is also a **local portal** (`./run.sh portal`) that serves every report the
+CLI can print, plus a Maintenance tab for the jobs that collect and write.
+
 ## Data sources
 
 | Source | Used for | Auth |
@@ -142,6 +145,7 @@ python -m congress_trades advise                # send that brief to a model
 python -m congress_trades resolve               # label the untickered assets
 python -m congress_trades topics                # hearing titles, then tag them by industry
 
+python -m congress_trades.portal                # or ./run.sh portal — all of the above in a page
 ```
 
 ### Keeping it current
@@ -495,6 +499,53 @@ are grouped in the output — one filing can carry twenty qualifying transaction
 and printing each buries everything else — while fingerprints stay per-trade so
 nothing is missed. Over six years of filings this averages well under one alert a
 day.
+
+## The portal
+
+`publish` renders three views into one static file. Everything else — the
+backtest, the filing-lag curve, the committee-timing test — only ever reached a
+terminal. The portal serves all of it on localhost, with no new dependencies:
+
+```bash
+./run.sh portal            # http://127.0.0.1:8777
+./run.sh portal stop       # or press Stop portal in the page
+```
+
+Reports run as subprocesses rather than imports, so what the page shows is
+byte-identical to what the CLI prints, and a crash in one report cannot take the
+server down. Every report's options are declared in a table in `portal.py`;
+nothing else from a URL is ever passed through to a subprocess.
+
+### Maintenance, from the page
+
+The **Maintenance** tab runs the jobs that write, so the model-backed work does
+not have to be driven from a terminal:
+
+| | |
+|---|---|
+| **Model** | Which provider and model `advise`, `resolve` and `topics` will use, whether `CONGRESS_API_KEY` is set, and how many meetings have titles. **Check model** does the live round trip described above, including the JSON-schema step. |
+| **Refresh data** | `all` — collect, enrich, classify, price, render. |
+| **Resolve untickered assets** | `resolve --apply`. |
+| **Fetch hearing titles** | `topics --stage fetch`, with the start date as a field. |
+| **Tag hearing titles** | `topics --stage tag`. |
+
+Each of these writes to the database, so **only one runs at a time** and they
+share the slot with a refresh: `prices` holds one sqlite write transaction open
+for its whole pass, and a second writer would die with "database is locked"
+partway through. Starting a second job is refused with the name of the one
+already running rather than queued, because these take minutes to hours and a
+queued job would surprise whoever started it later.
+
+A job whose prerequisites are missing is disabled with the reason on the button —
+no model configured, no API key, no titles fetched yet — rather than failing a
+few minutes in. The buttons are plain forms, so the page works without
+JavaScript; the single-page app posts to the same endpoints.
+
+Progress appears in the bar at the top of every page, naming whichever job is
+running. There is no cancel button: stopping the portal stops the job with it.
+
+The **Committee timing** report has a `sector-matched` tick-box, which is the
+narrower arm described above.
 
 ## An MCP server, for agents
 

@@ -1,7 +1,7 @@
 """A local portal over everything this repo can already tell you.
 
-`publish` renders three views into one static file. The other nine commands only
-ever reach a terminal, which is where most of the analysis actually lives -- the
+`publish` renders three views into one static file. The other commands only ever
+reach a terminal, which is where most of the analysis actually lives -- the
 backtest, the filing-lag curve, the committee-timing test. This serves all of it
 in one place, on localhost, with no new dependencies:
 
@@ -11,11 +11,23 @@ Reports are run as subprocesses rather than imported, so what you read here is
 byte-identical to what the CLI prints, and a crash in one report cannot take the
 server down with it.
 
-Refreshing is serialised behind a lock and runs in a background thread, because
-`prices` holds one sqlite write transaction open for its whole pass: a second
-writer would die with "database is locked" partway through collection. Read-only
-reports keep working while a refresh runs -- they see the pre-transaction state
-until it commits.
+Two tables define everything a request can reach. REPORTS holds the read-only
+commands with the parameters each may take; JOBS holds the long-running ones that
+write. Nothing outside those tables is ever passed to a subprocess -- the single
+exception is the `since` date for a title fetch, which is matched against a
+strict pattern first -- so a crafted URL cannot smuggle arguments into the CLI.
+
+Every job is serialised behind one slot and runs in a background thread, because
+they all write and `prices` holds one sqlite write transaction open for its whole
+pass: a second writer would die with "database is locked" partway through
+collection. A second job is refused with the name of the one already running
+rather than queued, since these take minutes to hours and a queued job would
+surprise whoever started it. Read-only reports keep working throughout -- they
+see the pre-transaction state until it commits.
+
+Jobs whose prerequisites are missing are disabled with the reason attached, which
+is why _prereq() checks for a configured model, an API key and fetched titles
+here rather than leaving it to the subprocess to fail several minutes in.
 """
 from __future__ import annotations
 
@@ -31,7 +43,7 @@ import time
 import datetime as dt
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, quote
 
 from . import prices
 from .config import CONFIG
@@ -57,13 +69,46 @@ REPORTS: dict[str, dict] = {
                   "blurb": "Would following the disclosures actually have paid?"},
     "lag":       {"title": "Filing lag", "args": {"floor": int}, "defaults": {"floor": 1},
                   "blurb": "Does a late filing predict a better trade?"},
-    "timing":    {"title": "Committee timing", "args": {"floor": int, "window": int},
+    "timing":    {"title": "Committee timing",
+                  "args": {"floor": int, "window": int, "sector-matched": bool},
                   "defaults": {"floor": 1, "window": 30},
-                  "blurb": "Do members trade around their own hearings?"},
+                  "blurb": "Do members trade around their own hearings? Tick "
+                           "sector-matched for the arm that requires the hearing "
+                           "to be about the industry traded."},
     "mix":       {"title": "Asset mix", "args": {"floor": int}, "defaults": {"floor": 0},
                   "blurb": "Who is trading and who is parking."},
     "alerts":    {"title": "Alerts",    "args": {"days": int}, "defaults": {"days": 14},
                   "blurb": "What crossed a bar recently. Never marks anything seen."},
+}
+
+# The long-running commands, with their argv fixed here. Nothing from a request
+# reaches the subprocess except a `since` date matched against a strict pattern,
+# so a crafted POST cannot add arguments. Every one of these writes to the
+# database, which is why only one runs at a time and they share the slot with a
+# refresh rather than getting one each.
+JOBS: dict[str, dict] = {
+    "refresh": {
+        "title": "Refresh data", "verb": "Refreshing",
+        "argv": ["-v", "all"], "needs": (),
+        "blurb": "Collect, enrich, classify, price and render. 15-25 minutes on "
+                 "a cold cache; reports stay readable while it runs."},
+    "resolve": {
+        "title": "Resolve untickered assets", "verb": "Resolving",
+        "argv": ["resolve", "--apply"], "needs": ("model",),
+        "blurb": "Label the asset names no pattern could place, and write the "
+                 "tickers that survive all four checks into the trades table. "
+                 "Run `prices` afterwards to score what it recovers."},
+    "topics-fetch": {
+        "title": "Fetch hearing titles", "verb": "Fetching",
+        "argv": ["topics", "--stage", "fetch"], "needs": ("key",), "since": True,
+        "blurb": "Meeting titles from Congress.gov, which the shipped snapshot "
+                 "omits. About a minute per 60 meetings, resumable, and cached "
+                 "forever once fetched."},
+    "topics-tag": {
+        "title": "Tag hearing titles", "verb": "Tagging",
+        "argv": ["topics", "--stage", "tag"], "needs": ("model", "titles"),
+        "blurb": "Read each title and record which industries it bears on. "
+                 "Needed before the sector-matched timing arm can find anything."},
 }
 
 # Written on start, removed on exit, so `portal stop` knows what to signal.
@@ -71,7 +116,7 @@ PIDFILE = Path(__file__).resolve().parent.parent / ".portal.pid"
 
 # Long-running collection state, shared across request threads.
 _refresh = {"running": False, "started": 0.0, "line": "", "rc": None, "finished": 0.0,
-            "proc": None}
+            "proc": None, "job": "refresh"}
 _lock = threading.Lock()
 
 
@@ -116,9 +161,9 @@ def _report_args(name: str, q: dict) -> list[str]:
     return out
 
 
-def _refresh_worker() -> None:
+def _refresh_worker(argv: list[str]) -> None:
     try:
-        p = subprocess.Popen([sys.executable, "-u", "-m", "congress_trades", "-v", "all"],
+        p = subprocess.Popen([sys.executable, "-u", "-m", "congress_trades", *argv],
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                              cwd=str(Path(__file__).resolve().parent.parent))
         _refresh["proc"] = p
@@ -137,13 +182,66 @@ def _refresh_worker() -> None:
         _refresh["finished"] = time.time()
 
 
-def start_refresh() -> bool:
+def start_job(name: str = "refresh", since: str = "") -> tuple[bool, str]:
+    """(started, why-not). Refuses rather than queues: these jobs are minutes to
+    hours long, and a queued second one would surprise whoever started it."""
+    spec = JOBS.get(name)
+    if not spec:
+        return False, "no such job"
+    missing = [n for n in spec["needs"] if not _prereq()[n]["ok"]]
+    if missing:
+        return False, _prereq()[missing[0]]["why"]
+    argv = list(spec["argv"])
+    if spec.get("since") and since:
+        # The only request value that reaches a subprocess anywhere in this file.
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
+            return False, "since must be an ISO date, e.g. 2025-01-01"
+        argv += ["--since", since]
     with _lock:
         if _refresh["running"]:
-            return False
-        _refresh.update(running=True, started=time.time(), line="starting...", rc=None)
-    threading.Thread(target=_refresh_worker, daemon=True).start()
-    return True
+            return False, f"{JOBS[_refresh['job']]['title']} is already running"
+        _refresh.update(running=True, started=time.time(), line="starting...",
+                        rc=None, job=name)
+    threading.Thread(target=_refresh_worker, args=(argv,), daemon=True).start()
+    return True, ""
+
+
+def start_refresh() -> bool:
+    """Kept for the no-JavaScript page and anything already posting to /refresh."""
+    return start_job("refresh")[0]
+
+
+def _prereq() -> dict:
+    """What each job needs, and why it is not available when it is not.
+
+    Checked here rather than left to the subprocess so the UI can say what to do
+    before you press a button and wait for it to fail.
+    """
+    from . import llm
+    try:
+        s = llm.settings()
+        model = {"ok": True, "why": "",
+                 "detail": f"{s.provider}: {s.model} at {s.base}"}
+    except SystemExit as e:
+        model = {"ok": False, "why": str(e).split(".")[0] + ".",
+                 "detail": "no model configured"}
+    import os
+    key = bool(os.getenv("CONGRESS_API_KEY", "").strip())
+    try:
+        with _ro() as conn:
+            titled = conn.execute(
+                "SELECT count(*) FROM committee_meetings "
+                "WHERE title IS NOT NULL AND title != ''").fetchone()[0]
+    except sqlite3.Error:
+        titled = 0
+    return {
+        "model": model,
+        "key": {"ok": key, "detail": "set" if key else "not set",
+                "why": "CONGRESS_API_KEY is not set. It is free and instant at "
+                       "https://api.congress.gov/sign-up/ — put it in .env."},
+        "titles": {"ok": titled > 0, "detail": f"{titled:,} meetings have a title",
+                   "why": "No meeting has a title yet. Fetch hearing titles first."},
+    }
 
 
 # --- database summary --------------------------------------------------------
@@ -363,9 +461,12 @@ def shell(title: str, body: str, current: str = "") -> bytes:
     for key, spec in REPORTS.items():
         cur = ' aria-current="page"' if current == key else ""
         nav.append(f'<a href="/r/{key}"{cur}>{html.escape(spec["title"])}</a>')
+    nav.append('<a href="/jobs"%s>Maintenance</a>'
+               % (' aria-current="page"' if current == "jobs" else ""))
     running = _refresh["running"]
+    verb = JOBS.get(_refresh["job"], {}).get("verb", "Running")
     bar = (f'<div class="bar"><button id="rf"{" disabled" if running else ""}>'
-           f'{"Refreshing..." if running else "Refresh data"}</button>'
+           f'{verb + "..." if running else "Refresh data"}</button>'
            f'<span class="live" id="live">{html.escape(_refresh["line"] if running else "")}</span>'
            '<span class="note">Collection holds the database for 15-20 minutes on a cold '
            'cache; reports stay readable while it runs.</span></div>')
@@ -411,6 +512,50 @@ def overview() -> str:
             'Sector alpha on fund holdings is noise, because a fund inherits its sponsor\'s '
             'SIC code. Past alpha barely predicts future alpha - the scorecard prints the '
             'correlation, and it is near zero.</p>')
+
+
+def jobs_page(msg: str = "") -> str:
+    """The no-JavaScript maintenance page. Plain forms, one button each."""
+    pre = _prereq()
+    running = _refresh["running"]
+
+    def line(key: str, label: str) -> str:
+        v = pre[key]
+        cls = "num pos" if v["ok"] else "num neg"
+        return (f'<div><b>{html.escape(label)}</b> <span class="{cls}">'
+                f'{"ok" if v["ok"] else "not ready"}</span> &mdash; '
+                f'{html.escape(v["detail"])}</div>')
+
+    out = [f'<div class="err">{html.escape(msg)}</div>' if msg else "",
+           '<div class="chartbox"><h2>Model</h2>',
+           '<p class="cap">What <code>advise</code>, <code>resolve</code> and '
+           '<code>topics</code> will use. Set it in <code>.env</code>; a shell '
+           'export beats the file.</p>',
+           line("model", "Model"), line("key", "Congress.gov key"),
+           line("titles", "Meeting titles"),
+           '<p class="note">Run <code>./run.sh llm</code> in a terminal for a live '
+           'round trip, including the JSON-schema step that <code>resolve</code> '
+           'and <code>topics</code> depend on.</p></div>',
+           '<h2>Jobs</h2>',
+           '<p class="note">Each writes to the database, so only one runs at a '
+           'time and they share the slot with a refresh.</p>']
+    for name, spec in JOBS.items():
+        missing = [n for n in spec["needs"] if not pre[n]["ok"]]
+        why = pre[missing[0]]["why"] if missing else ""
+        dis = " disabled" if missing or running else ""
+        since = ('<input name="since" value="2025-01-01" style="max-width:9rem" '
+                 'aria-label="fetch from this date"> ') if spec.get("since") else ""
+        note = (f'<p class="note neg">{html.escape(why)}</p>' if why else
+                '<p class="note">Another job is running.</p>' if running else "")
+        out += [f'<div class="chartbox"><h2>{html.escape(spec["title"])}</h2>'
+                f'<p class="cap">{html.escape(spec["blurb"])}</p>{note}'
+                f'<form method="post" action="/job/{name}?html=1">{since}'
+                f'<button type="submit"{dis}>{html.escape(spec["title"])}</button>'
+                '</form></div>']
+    if running:
+        out.append(f'<p class="note">Running: {html.escape(_refresh["line"])}. '
+                   'Reload to see progress.</p>')
+    return "".join(out)
 
 
 def options_form(name: str, q: dict) -> str:
@@ -858,10 +1003,31 @@ class Handler(BaseHTTPRequestHandler):
                    "application/json; charset=utf-8", code)
 
     def do_POST(self):
-        path = urlparse(self.path).path
+        u = urlparse(self.path)
+        path, q = u.path, parse_qs(u.query)
         if path == "/refresh":
             started = start_refresh()
             self._json({"started": started, "running": _refresh["running"]})
+            return
+        if path.startswith("/job/"):
+            name = path[len("/job/"):]
+            since = (q.get("since") or [""])[0].strip()
+            as_html = (q.get("html") or [""])[0] == "1"
+            if as_html and not since:
+                # The no-JavaScript form sends its fields in the body.
+                n = int(self.headers.get("Content-Length") or 0)
+                if 0 < n <= 4096:
+                    body = parse_qs(self.rfile.read(n).decode("utf-8", "replace"))
+                    since = (body.get("since") or [""])[0].strip()
+            started, why = start_job(name, since)
+            if as_html:
+                self.send_response(303)
+                self.send_header("Location",
+                                 "/jobs" if started else "/jobs?msg=" + quote(why))
+                self.end_headers()
+                return
+            self._json({"started": started, "why": why, "job": _refresh["job"],
+                        "running": _refresh["running"]}, 200 if started else 409)
             return
         if path == "/shutdown":
             # A refresh is a long, resumable job, but stopping mid-`prices` throws
@@ -883,10 +1049,32 @@ class Handler(BaseHTTPRequestHandler):
         path, q = u.path, parse_qs(u.query)
 
         if path == "/status":
+            job = _refresh["job"]
             self._json({"running": _refresh["running"], "line": _refresh["line"],
-                        "rc": _refresh["rc"],
+                        "rc": _refresh["rc"], "job": job,
+                        "title": JOBS.get(job, {}).get("title", job),
+                        "verb": JOBS.get(job, {}).get("verb", "Running"),
                         "elapsed": int(time.time() - _refresh["started"])
                         if _refresh["started"] else 0})
+            return
+        if path == "/api/jobs":
+            pre = _prereq()
+            self._json({
+                "jobs": [{"name": k, "title": v["title"], "blurb": v["blurb"],
+                          "needs": list(v["needs"]), "since": bool(v.get("since")),
+                          "ready": all(pre[n]["ok"] for n in v["needs"]),
+                          "why": next((pre[n]["why"] for n in v["needs"]
+                                       if not pre[n]["ok"]), "")}
+                         for k, v in JOBS.items()],
+                "prereq": pre,
+                "running": _refresh["running"], "current": _refresh["job"]})
+            return
+        if path == "/api/llm":
+            # The live round trip, not the shape checks: it is the only thing
+            # that catches an endpoint which answers but ignores a JSON schema,
+            # which is exactly what resolve and topics depend on.
+            rc, out = _run(["llm"], timeout=180)
+            self._json({"rc": rc, "text": out})
             return
         if path == "/api/stats":
             self._json(stats()); return
@@ -932,6 +1120,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(shell("Not found", '<div class="err">No such report.</div>'), code=404)
                 return
             self._send(shell(REPORTS[name]["title"], report_page(name, q), name))
+            return
+        if path == "/jobs":
+            self._send(shell("Maintenance", jobs_page(
+                (q.get("msg") or [""])[0][:200]), "jobs"))
             return
         if path == "/overview":
             self._send(shell("Congress Trades", overview(), ""))
@@ -1147,7 +1339,7 @@ let facets={members:[],tickers:[]};
 
 // --- routing ---------------------------------------------------------------
 const routes=()=>[['','Overview'],['trends','Trends'],['explore','Explore'],['page','Full page'],
-  ...Object.entries(REPORTS).map(([k,v])=>['r/'+k,v.title])];
+  ...Object.entries(REPORTS).map(([k,v])=>['r/'+k,v.title]),['jobs','Maintenance']];
 function nav(){
   const cur=location.hash.replace(/^#\\//,'');
   $('#nav').innerHTML=routes().map(([h,t])=>
@@ -1161,6 +1353,7 @@ async function route(){
   if(cur==='trends') return trends();
   if(cur==='explore') return explore();
   if(cur==='page') return full();
+  if(cur==='jobs') return jobs();
   if(cur.startsWith('r/')) return report(cur.slice(2));
   return overview();
 }
@@ -1770,6 +1963,55 @@ async function run(name){
   annotate(out);
 }
 
+// --- maintenance: the jobs that write, and the model they need --------------
+async function jobs(){
+  app.innerHTML='<div class="spin">loading...</div>';
+  const d=await (await fetch('/api/jobs')).json();
+  const p=d.prereq;
+  const row=(k,label)=>`<div><b>${esc(label)}</b> <span class="${p[k].ok?'num pos':'num neg'}">`+
+    `${p[k].ok?'ok':'not ready'}</span> &mdash; ${esc(p[k].detail)}</div>`;
+  const cards=d.jobs.map(j=>{
+    const dis=(!j.ready||d.running)?' disabled':'';
+    const since=j.since?`<input id="since" value="2025-01-01" inputmode="numeric"
+      style="max-width:9rem;margin-right:.5rem" aria-label="fetch from this date">`:'';
+    const why=!j.ready?`<p class="note neg">${esc(j.why)}</p>`
+      :(d.running?'<p class="note">Another job is running; only one writes at a time.</p>':'');
+    return `<div class="chartbox"><h2>${esc(j.title)}</h2>
+      <p class="cap">${esc(j.blurb)}</p>${why}
+      <div>${since}<button data-job="${esc(j.name)}"${dis}>${esc(j.title)}</button></div></div>`;
+  }).join('');
+  app.innerHTML=`<div class="chartbox"><h2>Model</h2>
+      <p class="cap">What <code>advise</code>, <code>resolve</code> and <code>topics</code>
+      will use. Set it in <code>.env</code>; a shell export beats the file.</p>
+      ${row('model','Model')}${row('key','Congress.gov key')}${row('titles','Meeting titles')}
+      <p class="note">The check below is a live round trip. Its last step asks for JSON
+      constrained by a schema &mdash; the part <code>resolve</code> and <code>topics</code>
+      rest on, and the part an endpoint can silently ignore while still answering.</p>
+      <div><button id="llmck">Check model</button></div>
+      <pre id="llmout" style="display:none"></pre></div>
+    <h2>Jobs</h2>
+    <p class="note">Each of these writes to the database, so only one runs at a time and
+    they share the slot with a refresh. Progress shows in the bar at the top of the page.</p>
+    ${cards}`;
+  $('#llmck').onclick=async e=>{
+    const b=e.target, out=$('#llmout');
+    b.disabled=true; b.textContent='checking...';
+    out.style.display=''; out.textContent='running a live round trip...';
+    try{ const r=await (await fetch('/api/llm')).json();
+      out.textContent=r.text||'(no output)';
+      out.className=r.rc?'err':'';
+    }catch(err){ out.textContent='could not reach the server'; }
+    b.disabled=false; b.textContent='Check model';
+  };
+  app.querySelectorAll('button[data-job]').forEach(b=>{ b.onclick=async()=>{
+    const since=$('#since')?('?since='+encodeURIComponent($('#since').value.trim())):'';
+    b.disabled=true;
+    const r=await (await fetch('/job/'+b.dataset.job+since,{method:'POST'})).json();
+    if(!r.started){ alert(r.why||'could not start'); b.disabled=false; return; }
+    tick(); jobs();
+  };});
+}
+
 function full(){
   app.innerHTML='<p class="note">The rendered static page, exactly as `publish` writes it. '+
     '<a href="/page" target="_blank" rel="noopener">Open in its own tab</a>.</p>'+
@@ -1781,13 +2023,14 @@ async function tick(){
   try{
     const s=await (await fetch('/status')).json();
     const b=$('#rf'), l=$('#live');
-    if(s.running){ b.disabled=true; b.textContent='Refreshing...';
+    if(s.running){ b.disabled=true; b.textContent=(s.verb||'Running')+'...';
       l.textContent=(s.line||'')+(s.elapsed?`  (${Math.floor(s.elapsed/60)}m${s.elapsed%60}s)`:'');
       setTimeout(tick,1500);
     } else {
       b.disabled=false; b.textContent='Refresh data';
-      if(s.rc===0){ l.textContent='done'; statline(); route(); setTimeout(()=>l.textContent='',4000); }
-      else if(s.rc!=null){ l.textContent='failed: '+(s.line||'see the terminal'); }
+      if(s.rc===0){ l.textContent=(s.title||'done')+' finished'; statline(); route();
+        setTimeout(()=>l.textContent='',4000); }
+      else if(s.rc!=null){ l.textContent=(s.title||'job')+' failed: '+(s.line||'see the terminal'); }
     }
   }catch(e){ $('#live').textContent='lost contact with the server'; }
 }
