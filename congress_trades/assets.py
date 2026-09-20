@@ -88,6 +88,20 @@ CLASSES = (
 )
 
 
+UNLABELLED = "Other / unlabelled"
+
+# The closed vocabulary. Every route to a label -- the filing's type code, the
+# keyword fallback, and the model pass in resolve.py -- answers with one of these,
+# so `mix` stays a partition of the rows however each label was reached. Derived
+# rather than typed out, so adding a pattern cannot leave the model's enum stale.
+VOCAB: tuple[str, ...] = tuple(sorted(
+    ({"Listed equity", UNLABELLED}
+     | {v for v in CODE_CLASS.values() if v}
+     | {v for v in BROAD_CODES.values() if v}
+     | {label for label, _ in CLASSES}),
+    key=lambda x: (x == UNLABELLED, x)))
+
+
 def classify(name: str) -> str:
     """One label per untickered asset.
 
@@ -108,7 +122,7 @@ def classify(name: str) -> str:
             return label
     if code in BROAD_CODES and BROAD_CODES[code]:
         return BROAD_CODES[code]
-    return "Other / unlabelled"
+    return UNLABELLED
 
 
 def known_tickers(conn) -> set[str]:
@@ -165,16 +179,35 @@ def repair_tickers(cfg=CONFIG, dry_run: bool = False, quiet: bool = False) -> in
     return 0
 
 
+def stored_labels(conn) -> dict[str, str]:
+    """Labels a model supplied, from `congress-trades resolve`.
+
+    Empty unless that command has been run, which is why nothing downstream needs
+    to know whether it ever was.
+    """
+    return {r["asset_name"]: r["label"] for r in
+            conn.execute("SELECT asset_name, label FROM asset_labels")}
+
+
 def mix(floor: int = 0, cfg=CONFIG) -> dict:
-    """Asset mix per member, and overall: is this person trading or parking?"""
+    """Asset mix per member, and overall: is this person trading or parking?
+
+    Where a model label exists it is used only for rows the deterministic pass
+    could not place. The filing's own type code and the keyword patterns stay
+    authoritative: they read evidence in the document, and a model's reading of a
+    name is weaker evidence than the document stating its own asset type.
+    """
     with db.connect(cfg.db_path) as conn:
         rows = [dict(r) for r in conn.execute(
             """SELECT member, chamber, ticker, asset_name, amount_min
                  FROM congress_trades WHERE amount_min >= ?""", (floor,))]
+        supplied = stored_labels(conn)
     overall: dict[str, int] = {}
     per: dict[str, dict] = {}
     for r in rows:
         label = "Listed equity" if r["ticker"] else classify(r["asset_name"])
+        if label == UNLABELLED:
+            label = supplied.get(r["asset_name"], UNLABELLED)
         overall[label] = overall.get(label, 0) + 1
         m = per.setdefault(r["member"], {"chamber": r["chamber"], "n": 0,
                                          "classes": {}})
@@ -236,7 +269,15 @@ def selftest(cfg=CONFIG):
     assert classify("New York NY City Transitional Fin") == "Government & municipal debt"
     assert classify("Vanguard Total Stock Market Index Fund") == "Funds & trusts"
     assert classify("SPY Option [OT]") == "Options & derivatives"
-    assert classify("") == "Other / unlabelled"
+    assert classify("") == UNLABELLED
+    # Whatever route a name takes, it lands inside the vocabulary the model is
+    # given as an enum -- otherwise `mix` would stop partitioning the rows.
+    assert set(CODE_CLASS.values()) <= set(VOCAB)
+    assert VOCAB[-1] == UNLABELLED, "the escape hatch should sort last"
+    with db.connect(cfg.db_path) as conn:
+        names = [r["asset_name"] for r in conn.execute(
+            "SELECT DISTINCT asset_name FROM congress_trades WHERE ticker = ''")]
+    assert all(classify(n) in VOCAB for n in names), "a label escaped the vocabulary"
 
     # The repair pass must never invent a ticker we have no evidence for.
     with db.connect(cfg.db_path) as conn:

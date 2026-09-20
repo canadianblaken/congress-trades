@@ -51,12 +51,17 @@ Nothing, for almost all of it. No account, no paid feed, no API key:
 |---|---|
 | House Clerk, Senate eFD, Wikipedia, Voteview, Yahoo prices | no auth at all |
 | `CONGRESS_CONTACT` | **not a key** — your own email, sent in the User-Agent. The SEC answers 403 to anonymous automated clients, so `sectors` and `all` stop with an explanation without it |
-| `CONGRESS_API_KEY` | optional. Only extends committee meetings past the shipped snapshot. Free and instant at [api.congress.gov](https://api.congress.gov/sign-up/) |
-| `CONGRESS_LLM_*` | optional. Only `advise`; point it at any OpenAI-compatible endpoint, including a local one |
+| `CONGRESS_API_KEY` | optional. Extends committee meetings past the shipped snapshot, and is the only way to get meeting *titles* for `topics`. Free and instant at [api.congress.gov](https://api.congress.gov/sign-up/) |
+| `CONGRESS_LLM_*` / `CONGRESS_OLLAMA_*` | optional. `advise`, `resolve` and `topics`; either a local Ollama or any OpenAI-compatible endpoint |
 
 So collection, pricing, the scorecard, the backtests, filing lag, committee
 timing, alerts, the rendered page and the MCP server all work with one email
 address and no signup anywhere.
+
+Settings go in a `.env` beside this README — copy `.env.example`. Both `run.sh`
+and `python -m congress_trades` read it, and anything already exported in your
+shell wins over the file, so `CONGRESS_OLLAMA_MODEL=gemma4:12b python -m
+congress_trades resolve` still overrides it for one run.
 
 ## Install
 
@@ -127,9 +132,16 @@ python -m congress_trades backtest              # would following them have paid
 python -m congress_trades lag                   # alpha by how late it was disclosed
 python -m congress_trades committees            # committee meeting dates (needs a key)
 python -m congress_trades timing                # do they trade around their hearings?
+python -m congress_trades timing --sector-matched   # ...counting only hearings on the industry traded
 python -m congress_trades alerts                # only what crossed a bar since last run
 python -m congress_trades mix                   # who is trading and who is parking
-python -m congress_trades advise                # send that brief to an LLM
+
+# model-backed, never part of `all`, configured in .env — see .env.example
+python -m congress_trades llm                   # check the model, including JSON schema
+python -m congress_trades advise                # send that brief to a model
+python -m congress_trades resolve               # label the untickered assets
+python -m congress_trades topics                # hearing titles, then tag them by industry
+
 ```
 
 ### Keeping it current
@@ -532,17 +544,150 @@ that member's own median trade), **committee overlap** (a trade in a sector the
 member's own committee has jurisdiction over), and **track record** (share of
 closed 90-day windows that moved the way the member traded).
 
-`advise` posts that digest to any OpenAI-compatible `/chat/completions` endpoint —
-OpenAI, LiteLLM, Ollama, vLLM, OpenRouter, Groq, Together all speak it, and
-Anthropic models reach it through LiteLLM:
+`advise` posts that digest to a model. Two providers, picked with
+`CONGRESS_LLM_PROVIDER`:
 
 ```bash
+# a local Ollama — its native API, not the /v1 shim
+export CONGRESS_LLM_PROVIDER=ollama
+export CONGRESS_OLLAMA_MODEL=qwen3.8:27b            # required; `ollama list` shows yours
+export CONGRESS_OLLAMA_BASE=http://127.0.0.1:11434  # default
+export CONGRESS_OLLAMA_NUM_CTX=8192                 # default
+
+# or any OpenAI-compatible /chat/completions endpoint —
+# OpenAI, LiteLLM, vLLM, OpenRouter, Groq, Together all speak it, and
+# Anthropic models reach it through LiteLLM
+export CONGRESS_LLM_PROVIDER=openai                 # default
 export CONGRESS_LLM_BASE=http://127.0.0.1:4000/v1   # default; any compatible host
 export CONGRESS_LLM_MODEL=reason                    # required
 export CONGRESS_LLM_KEY=...                         # if the endpoint wants one
+
 python -m congress_trades advise --days 90
 python -m congress_trades advise --dry-run          # print the prompt, call nothing
 ```
+
+To check what you configured actually works — including the part `advise` does not
+need but `resolve` and `topics` depend on:
+
+```bash
+python -m congress_trades llm
+```
+
+It prints the resolved settings, confirms the endpoint answers and the model is
+pulled, does one plain completion, and then one constrained by a JSON schema with
+an enum. That last step is the one worth running after any change: an endpoint
+that silently ignores a schema still answers, plausibly, and the damage shows up
+much later as labels outside their vocabulary. `--selftest` does the shape checks
+without calling anything.
+
+Ollama also answers the OpenAI shape on `:11434/v1`, so the second form works
+against it too. The native client exists because the batch commands below need
+three things the shim does not give: a context size set per request (the shim
+serves the Modelfile's `num_ctx`, often 4096, and silently drops the overflow),
+decoding constrained to a JSON schema so a label cannot fall outside its
+vocabulary, and `think: false` for models that would otherwise spend the budget
+reasoning about a one-word answer.
+
+### Resolving what the parser could not
+
+`repair-tickers` recovers a symbol the filing spelled out in brackets. What is
+left after it is 382 distinct asset names no pattern reaches, and they are two
+different piles under one label: instruments that need world knowledge
+(`ATHERTON MICH CMNTY SCH` is municipal debt, `BANK AMERICA CORP SER N MTN` is
+corporate debt), and ordinary listed equities whose filing never wrote the
+symbol (`Analog Devices`, `AMD`, `BRK-B - Berkshire Hathaway Inc Class B`).
+The second pile is excluded from every return, scorecard and backtest here,
+because an untickered row cannot be priced.
+
+```bash
+python -m congress_trades resolve --dry-run    # show the proposals, write nothing
+python -m congress_trades resolve              # store labels; no ticker writes
+python -m congress_trades resolve --apply      # also write verified tickers to trades
+python -m congress_trades resolve --reverify   # re-run the gates, calling no model
+```
+
+The model's raw proposal is stored alongside the verdict, so `--reverify` replays
+the gates over what it already said. The gates are the part that keeps changing —
+each real run turned up another way for a plausible symbol to be wrong — and
+re-asking a model to re-test a rule it has no part in would be slow,
+non-deterministic, and would confuse a gate change with a different answer.
+
+A wrong ticker is far worse than no ticker: it gets priced, scored and
+attributed to a member as a trade they never made. Asked about a Birmingham
+bond during development a model answered `BIRMINGHAM ALA GO WTS SER. 2018`;
+asked about `GOLDMAN SACHS GROUP INC` it answered `GOOGL`. So nothing the model
+says about a symbol is trusted, only treated as a candidate, and four gates
+stand between a candidate and the trades table:
+
+1. the label has to be an instrument that *has* a symbol — a bond issued by a
+   listed company is still a bond;
+2. the string has to be shaped like a symbol;
+3. SEC's own `company_tickers` file has to register it, and SEC's name for it
+   has to match the filing text specifically — one generic word like
+   "Financial" in common is not identification, and a finance subsidiary is
+   refused outright, because `General Motors Financial Company` is not
+   `General Motors Co` however alike the names read;
+4. the price source has to return a real series for it.
+
+A symbol the filing itself wrote is the exception to gate 3: that is the
+filing's own assertion, the same evidence `repair-tickers` accepts, and the
+model only noticed it. Everything refused is kept with the reason, which is the
+most useful thing in the table for judging whether the pass is working.
+
+Labels are held to a lower bar — they are stored in `asset_labels`, never merged
+into the trades table, and `mix` consults them only for rows the deterministic
+classifier gave up on. The filing's own asset-type code and the keyword patterns
+stay authoritative. Drop the table and you are back to parsed fact.
+
+### What each hearing was about
+
+`timing` locates a trade relative to any meeting of any committee the member
+sits on, and its own caveat says why that is weak: proximity is not
+jurisdiction. It is weaker than it sounds — **94% of priced trades by a member
+with a seat fall within 30 days of one of their own committee's meetings**,
+because busy committees meet weekly. A treatment group of almost everybody
+cannot show anything.
+
+The fix needs subject matter, which means meeting titles, and the shipped
+snapshot omits them on purpose. Two stages:
+
+```bash
+python -m congress_trades topics --stage fetch --since 2025-01-01   # needs CONGRESS_API_KEY
+python -m congress_trades topics --stage tag                        # needs a model
+python -m congress_trades timing --sector-matched                   # the narrower arm
+```
+
+Fetching measures about 0.95s per meeting on an idle machine — roughly 45 minutes
+for 2025 onward, two and a half hours for the full back catalogue. It is resumable
+and cached on disk forever, because a meeting that has happened never changes, so
+an interrupted run costs nothing to restart. `--since` limits it to the years you
+actually score. Don't run it beside `tag`: a loaded local model slows the fetch
+several times over.
+
+Tagging asks a model which industries a hearing bears on, from the same
+vocabulary `ticker_sectors` uses, so a tag can match a trade. It must be able to
+answer *none*: most meetings are nominations, budgets, agency oversight or
+procedure and touch no traded industry at all. A tagger that found a sector in
+everything would rebuild the exact dilution this exists to remove, so the run
+warns if more than 60% of meetings come back with one.
+
+Then `timing --sector-matched` counts a meeting only where its subject overlaps
+the industry of the company traded.
+
+On the 2025-onward run here, 2,732 titles tagged with `qwen3.8:27b` put 535
+meetings on some industry and 2,197 on none, and the treatment group fell from
+8,755 trades to 782 — from nearly every eligible trade to about one in eleven,
+which is the dilution this exists to fix. Nothing in that arm has an interval
+that misses zero, **but its medians are not smaller than the wider arm's — in
+several buckets they are larger.** That is lost power, not a refuted effect, and
+the report says so rather than letting a null at n≈84 read as absence. The
+period is not the explanation: restricting the wider arm to the same 2025+ window
+leaves both of its corrected-significant buckets intact.
+
+Note also that this is a **second family of
+tests**: the Bonferroni correction inside the report covers the buckets within
+one arm, not the choice between arms. Running both and reporting whichever looks
+better is precisely the failure that correction exists to stop.
 
 ### What this data cannot tell you
 
@@ -582,6 +727,21 @@ All via environment variables; every one has a working default except the first.
 | `CONGRESS_MIN_AMOUNT` | `0` | Bracket floor at *collection* time |
 | `CONGRESS_DEFAULT_FLOOR` | `15001` | Floor the page *selects* by default |
 | `CONGRESS_NUMBER` | `119` | Congress to score votes for |
+| `CONGRESS_API_KEY` | *(unset)* | Congress.gov; meeting dates past the snapshot, and all meeting titles |
+| `CONGRESS_LLM_PROVIDER` | `openai` | `openai` or `ollama` |
+| `CONGRESS_LLM_BASE` | `http://127.0.0.1:4000/v1` | provider `openai`: any `/chat/completions` host |
+| `CONGRESS_LLM_MODEL` | *(unset)* | provider `openai`: required |
+| `CONGRESS_LLM_KEY` | *(unset)* | provider `openai`: bearer token, if wanted |
+| `CONGRESS_OLLAMA_BASE` | `http://127.0.0.1:11434` | provider `ollama`: the native port, not `/v1` |
+| `CONGRESS_OLLAMA_MODEL` | *(unset)* | provider `ollama`: required |
+| `CONGRESS_OLLAMA_NUM_CTX` | `8192` | context per request; raise for long batches |
+| `CONGRESS_OLLAMA_THINK` | `0` | leave off for labelling work |
+| `CONGRESS_OLLAMA_KEEP_ALIVE` | `5m` | how long Ollama holds the model in memory |
+
+A `.env` beside the README supplies any of these — copy `.env.example`. It is read
+by `run.sh` and by `python -m congress_trades` alike, and a variable already
+exported in your shell always wins over the file, so you can override it for a
+single run.
 
 Collection stores every disclosed bracket and the page filters for display, so you
 can change the floor without re-collecting. If you raise `CONGRESS_MIN_AMOUNT`,
@@ -645,8 +805,17 @@ python -m congress_trades lag --selftest         # bucket partition + sane lags
 python -m congress_trades timing --selftest      # widening correction + buckets
 python -m congress_trades alerts --selftest      # idempotence + no qualifier-only fires
 python -m congress_trades mix --selftest         # class partition + no invented tickers
+python3 tests/test_llm_and_resolve.py            # .env precedence, providers, ticker gates
+python -m congress_trades resolve --selftest     # every gate, no model and no network
+python -m congress_trades topics --selftest      # tag vocabulary matches the trades'
+python -m congress_trades llm --selftest         # provider settings, no model called
+python -m congress_trades llm                    # LIVE round trip against your endpoint
 python -c 'from congress_trades import mcp_server; mcp_server.selftest()'
 ```
+
+Nothing in the test suite calls a model or touches the network. The model layer is
+tested on its shapes — which variables each provider reads, and which proposed
+tickers each of the gates refuses.
 
 The parser tests are the ones that matter: they run against real filing layouts, and
 they are what will fail first if the Clerk changes a PDF template or the Senate

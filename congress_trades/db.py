@@ -1,5 +1,14 @@
-"""SQLite storage. Five tables: the disclosures themselves, who the filers are,
-their committee seats, an industry label per ticker, and forward price returns."""
+"""SQLite storage: the disclosures themselves, who the filers are, their committee
+seats, an industry label per ticker, forward price returns, the alert ledger,
+committee meeting dates, and the two tables a model writes to.
+
+Model output is kept apart from parsed fact, in its own tables, with the model
+that produced each row. Nothing here merges the two: a reader can always drop
+asset_labels and meeting_topics and be back to what the filings actually said.
+The one exception is a recovered ticker, which is written into congress_trades so
+the rest of the pipeline can price it -- and that only happens after the symbol
+has been checked against SEC registration and a real price series, so what lands
+in the trades table is a verified fact rather than a suggestion."""
 from __future__ import annotations
 
 import sqlite3
@@ -108,11 +117,51 @@ CREATE TABLE IF NOT EXISTS ticker_sectors (
     sector     TEXT,
     updated_at TEXT
 );
+
+-- What a model made of the asset names the parser could not resolve. Keyed on
+-- the filing's text verbatim, because that is what repeats across filings.
+CREATE TABLE IF NOT EXISTS asset_labels (
+    asset_name TEXT PRIMARY KEY,
+    label      TEXT NOT NULL,          -- one of assets.VOCAB, never free text
+    proposed   TEXT NOT NULL DEFAULT '',  -- the symbol the model offered, before any check
+    ticker     TEXT NOT NULL DEFAULT '',  -- '' unless independently verified
+    issuer     TEXT,                   -- the entity behind the instrument
+    confidence TEXT,                   -- high | medium | low, the model's own
+    verdict    TEXT,                   -- how a proposed ticker was checked, or why it was refused
+    model      TEXT NOT NULL,
+    updated_at TEXT
+);
+
+-- What each committee meeting was actually about. Titles come from Congress.gov;
+-- the sector tags are a model's reading of the title.
+CREATE TABLE IF NOT EXISTS meeting_topics (
+    event_id   TEXT PRIMARY KEY,
+    sectors    TEXT NOT NULL,          -- comma separated, from the sectors.py vocabulary
+    subject    TEXT,                   -- the title reduced to a plain subject line
+    confidence TEXT,
+    model      TEXT NOT NULL,
+    updated_at TEXT
+);
 """
 
 
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+# Columns added to a table after it shipped. CREATE TABLE IF NOT EXISTS does
+# nothing to an existing table, so a database made by an earlier version would
+# otherwise be missing them with no sign but a query error.
+_ADDED_COLUMNS = (
+    ("asset_labels", "proposed", "TEXT NOT NULL DEFAULT ''"),
+)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, column, decl in _ADDED_COLUMNS:
+        have = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if have and column not in have:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 @contextmanager
@@ -121,6 +170,7 @@ def connect(db_path: Path):
     conn.row_factory = sqlite3.Row
     try:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         yield conn
         conn.commit()
     finally:

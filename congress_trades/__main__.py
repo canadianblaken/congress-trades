@@ -13,7 +13,7 @@ import logging
 import sys
 
 from . import (advise, alerts, assets, backtest, collect, committees, digest,
-               lag, pipeline, prices, scorecard)
+               lag, llm, pipeline, prices, resolve, scorecard, topics)
 from .config import CONFIG
 from .publish import render
 
@@ -103,11 +103,32 @@ def main(argv=None) -> int:
                    help="rewrite the committed snapshot from the database")
     p.add_argument("--quiet", action="store_true")
 
+    p = sub.add_parser("llm", help="check the configured model: reachable, and "
+                       "can it honour a JSON schema?")
+    p.add_argument("--selftest", action="store_true",
+                   help="shape checks only, calling no model")
+
+    p = sub.add_parser("topics", help="what each committee meeting was about: fetch "
+                       "the titles, then tag them by industry with a model")
+    p.add_argument("--stage", choices=("fetch", "tag", "both"), default="both",
+                   help="'fetch' needs CONGRESS_API_KEY; 'tag' needs a model")
+    p.add_argument("--since", default="",
+                   help="only fetch titles for meetings on or after this ISO date "
+                        "— the full back catalogue is roughly two hours")
+    p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--refresh", action="store_true", help="re-tag titles already stored")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
     p = sub.add_parser("timing", help="do members trade around their own hearings?")
     p.add_argument("--floor", type=int, default=1)
     p.add_argument("--window", type=int, default=30)
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
+    p.add_argument("--sector-matched", action="store_true",
+                   help="count only meetings whose subject touches the industry "
+                        "traded (needs `topics`); the narrower, more meaningful arm")
 
     p = sub.add_parser("alerts", help="only what crossed a bar since last run")
     p.add_argument("--days", type=int, default=14)
@@ -127,7 +148,24 @@ def main(argv=None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
-    p = sub.add_parser("advise", help="send the digest to any OpenAI-compatible LLM")
+    p = sub.add_parser("resolve", help="label the untickered assets with a model, "
+                       "and recover the tickers it gets right")
+    p.add_argument("--scope", choices=("unlabelled", "all"), default="unlabelled",
+                   help="'unlabelled' asks only about names no pattern could place; "
+                        "'all' re-asks about every untickered name, to check the "
+                        "model against the patterns")
+    p.add_argument("--limit", type=int, default=0, help="stop after N names")
+    p.add_argument("--dry-run", action="store_true", help="show the proposals, write nothing")
+    p.add_argument("--apply", action="store_true",
+                   help="also write verified tickers into the trades table")
+    p.add_argument("--refresh", action="store_true", help="re-ask about names already stored")
+    p.add_argument("--reverify", action="store_true",
+                   help="re-run the gates over proposals already stored, calling "
+                        "no model — use after the verification rules change")
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("advise", help="send the digest to a model (see CONGRESS_LLM_PROVIDER)")
     p.add_argument("--days", type=int, default=90)
     p.add_argument("--floor", type=int, default=CONFIG.default_floor)
     p.add_argument("--dry-run", action="store_true", help="print the prompt, call nothing")
@@ -214,7 +252,8 @@ def main(argv=None) -> int:
         if args.selftest:
             committees.selftest(CONFIG)
             return 0
-        d = committees.build(args.floor, args.window, CONFIG)
+        d = committees.build(args.floor, args.window, CONFIG,
+                             args.sector_matched)
         if args.json:
             print(json.dumps(d, indent=2, default=str))
         else:
@@ -247,6 +286,26 @@ def main(argv=None) -> int:
         else:
             sys.stdout.write(assets.to_markdown(d))
         return 0
+    if args.cmd == "llm":
+        if args.selftest:
+            llm.selftest()
+            return 0
+        return llm.check()
+    if args.cmd == "topics":
+        if args.selftest:
+            topics.selftest(CONFIG)
+            return 0
+        return topics.run(CONFIG, args.stage, args.since, args.limit,
+                          args.refresh, args.dry_run, args.quiet)
+    if args.cmd == "resolve":
+        if args.selftest:
+            resolve.selftest(CONFIG)
+            llm.selftest()
+            return 0
+        if args.reverify:
+            return resolve.reverify(CONFIG, args.apply, args.dry_run, args.quiet)
+        return resolve.run(CONFIG, args.scope, args.limit, args.dry_run,
+                           args.apply, args.refresh, args.quiet)
     if args.cmd == "advise":
         return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)
     if args.cmd == "publish":

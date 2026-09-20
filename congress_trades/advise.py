@@ -1,29 +1,18 @@
-"""Hand the digest to any OpenAI-compatible chat endpoint and keep the reply.
+"""Hand the digest to a model and keep the reply.
 
-One code path on purpose. "Works with any AI by API" in practice means the
-OpenAI /chat/completions shape, which OpenAI, LiteLLM, Ollama, vLLM, OpenRouter,
-Groq and Together all speak. Anthropic models reach this through LiteLLM rather
-than a second client in here.
+The transport moved to llm.py when a second provider arrived; what stays here is
+the part that is actually about this data. The system prompt is the deliverable,
+not decoration: these filings lag the trade by 45 days, report brackets instead of
+amounts, and carry no market benchmark, so a model left to itself will happily
+turn convergence counts into confident stock picks. It is told the limits and told
+to rank by evidence.
 
-Configure entirely by environment, so nothing about your setup is committed:
-
-    CONGRESS_LLM_BASE   default http://127.0.0.1:4000/v1   (any compatible host)
-    CONGRESS_LLM_MODEL  required, e.g. reason / gpt-4o / claude-opus-5
-    CONGRESS_LLM_KEY    bearer token, if the endpoint wants one
-
-The system prompt is part of the deliverable, not decoration: this data has a
-45-day disclosure lag, reports brackets instead of amounts, and carries no
-market benchmark, so a model left to itself will happily turn convergence counts
-into confident stock picks. It is told the limits and told to rank by evidence.
+Pick a provider with CONGRESS_LLM_PROVIDER (openai | ollama); llm.py documents
+the variables each one reads.
 """
 from __future__ import annotations
 
-import json
-import os
-import urllib.error
-import urllib.request
-
-from . import digest
+from . import digest, llm
 from .config import CONFIG
 
 SYSTEM = """\
@@ -62,33 +51,12 @@ investment advice, and you should not pretend otherwise.\
 
 
 def ask(prompt: str, system: str = SYSTEM, timeout: int = 300) -> str:
-    base = os.getenv("CONGRESS_LLM_BASE", "http://127.0.0.1:4000/v1").rstrip("/")
-    model = os.getenv("CONGRESS_LLM_MODEL", "")
-    key = os.getenv("CONGRESS_LLM_KEY", "")
-    if not model:
-        raise SystemExit("CONGRESS_LLM_MODEL is not set. Pick a model your endpoint "
-                         "serves, e.g. CONGRESS_LLM_MODEL=reason for a LiteLLM route.")
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "system", "content": system},
-                     {"role": "user", "content": prompt}],
-        "temperature": 0.2,
-    }).encode()
-    req = urllib.request.Request(
-        f"{base}/chat/completions", data=body,
-        headers={"Content-Type": "application/json",
-                 **({"Authorization": f"Bearer {key}"} if key else {})})
+    """One prompt, one reply. A failure here is fatal by design: this command is
+    a single call, and a half-written brief is worse than none."""
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = json.load(r)
-    except urllib.error.HTTPError as e:
-        raise SystemExit(f"{base} answered {e.code}: {e.read()[:400].decode(errors='replace')}")
-    except urllib.error.URLError as e:
-        raise SystemExit(f"cannot reach {base}: {e.reason}")
-    try:
-        return data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError):
-        raise SystemExit(f"unexpected response shape: {json.dumps(data)[:400]}")
+        return llm.ask(prompt, system, timeout)
+    except llm.LLMError as e:
+        raise SystemExit(str(e))
 
 
 def run(days=90, floor=15001, dry_run=False, prev: str = "", cfg=CONFIG) -> int:
@@ -97,5 +65,8 @@ def run(days=90, floor=15001, dry_run=False, prev: str = "", cfg=CONFIG) -> int:
     if dry_run:
         print(prompt)
         return 0
+    # Resolve and check the target before building nothing twice: an unreachable
+    # endpoint or an unpulled model should say so immediately.
+    llm.preflight()
     print(ask(prompt))
     return 0
