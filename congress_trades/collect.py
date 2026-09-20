@@ -49,7 +49,14 @@ class MissingTool(RuntimeError):
 
 # --- House PDF layout -------------------------------------------------------------
 # "P  07/24/2026 07/24/2026" -- type letter then transaction date then notification date.
-_H_TYPE = re.compile(r"\b([PS])\b(?:\s*\(partial\))?\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})")
+#
+# E is exchange, and it was missing until a parser audit found it. The Clerk's
+# type codes are P (purchase), S (sale) and E (exchange); matching only [PS]
+# dropped 65 transactions across 40 filings silently, and the deterministic scan
+# could not see them because it counts with this same pattern. An exchange is
+# not a directional trade, and nothing downstream scores it as one.
+_H_TYPE = re.compile(r"\b([PSE])\b(?:\s*\(partial\))?\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})")
+_H_TX_TYPE = {"P": "buy", "S": "sell", "E": "exchange"}
 # The original form: a ticker in parentheses followed by an asset-type code,
 # e.g. "Apple Inc. (AAPL) [ST]". High confidence, so it is tried first.
 _H_TICKER = re.compile(r"\(([A-Za-z][A-Za-z.\-]{0,6})\)\s*\[")
@@ -143,32 +150,56 @@ def _house_ptr_text(cfg: Config, year: str, doc_id: str) -> str:
 
 
 def parse_house_ptr(text: str) -> list[dict]:
-    """Transactions out of one House PTR. Blank lines separate transaction blocks."""
+    """Transactions out of one House PTR.
+
+    Blank lines usually separate transaction blocks, but not always, and that
+    "usually" cost 241 transactions across 90 filings. When a page break lands
+    inside a transaction the Clerk reprints the column header there -- "ID Owner
+    Asset / Transaction Date / Type ..." -- with no blank line around it, so two
+    transactions end up in one block. Taking a single match per block dropped
+    the second every time. Filing 20033446 lost 23 of its 473 that way.
+
+    So every match in a block is a transaction, and each one is read from its
+    own span: the asset line immediately before it, and the text up to the next
+    match. Bounding the span matters as much as finding the match -- an unbounded
+    tail would read the FOLLOWING transaction's amount bracket when a page break
+    put the two together.
+    """
     rows = []
     for block in re.split(r"\n\s*\n", text):
-        kind = _H_TYPE.search(block)
-        if not kind:
-            continue
-        head = block[:kind.start()]
-        owner = _H_OWNER.search(head)
-        # asset name = the head line minus its owner code, whitespace collapsed
-        name = re.sub(r"^\s*(SP|JT|DC)\b", "", head).strip()
-        name = re.sub(r"\s{2,}", " ", name.splitlines()[0] if name else "").strip()
-        # Read from the head line, not the whole block: the tail holds amount
-        # brackets and dates that can carry their own parentheses.
-        tick = ticker_from_name(name) or ticker_from_name(block)
-        tail = block[kind.end():]
-        rows.append({
-            "owner": {"SP": "Spouse", "JT": "Joint", "DC": "Dependent"}.get(
-                owner.group(1) if owner else "", "Self"),
-            "ticker": tick,
-            "asset_name": name[:160],
-            "tx_type": "buy" if kind.group(1) == "P" else "sell",
-            "tx_date": kind.group(2),
-            "disclosed": kind.group(3),
-            "amount_min": _money_min(tail),
-            "amount_range": _money_range(tail),
-        })
+        found = list(_H_TYPE.finditer(block))
+        for i, kind in enumerate(found):
+            # The asset sits on the same line as the type letter, so the last
+            # line before the match is the one to read. For the first match that
+            # is the line the block opens with; for a later one it is the line
+            # after the reprinted header, and taking the FIRST line there would
+            # read the previous transaction's amount instead.
+            head = block[found[i - 1].end():kind.start()] if i else block[:kind.start()]
+            line = (head.splitlines() or [""])[-1]
+            owner = _H_OWNER.search(line)
+            # asset name = the head line minus its owner code, whitespace collapsed
+            name = re.sub(r"^\s*(SP|JT|DC)\b", "", line).strip()
+            name = re.sub(r"\s{2,}", " ", name).strip()
+            # Stop at the next transaction, so the amounts and the ticker read
+            # here belong to this one.
+            stop = found[i + 1].start() if i + 1 < len(found) else len(block)
+            tail = block[kind.end():stop]
+            # Read from the head line, not the whole block: the tail holds amount
+            # brackets and dates that can carry their own parentheses. The
+            # fallback is this transaction's own tail rather than the block,
+            # because the block may hold another transaction's symbol.
+            tick = ticker_from_name(name) or ticker_from_name(tail)
+            rows.append({
+                "owner": {"SP": "Spouse", "JT": "Joint", "DC": "Dependent"}.get(
+                    owner.group(1) if owner else "", "Self"),
+                "ticker": tick,
+                "asset_name": name[:160],
+                "tx_type": _H_TX_TYPE.get(kind.group(1), ""),
+                "tx_date": kind.group(2),
+                "disclosed": kind.group(3),
+                "amount_min": _money_min(tail),
+                "amount_range": _money_range(tail),
+            })
     return rows
 
 

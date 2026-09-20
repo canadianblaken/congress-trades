@@ -528,6 +528,7 @@ not have to be driven from a terminal:
 | **Resolve untickered assets** | `resolve --apply`. |
 | **Fetch hearing titles** | `topics --stage fetch`, with the start date as a field. |
 | **Tag hearing titles** | `topics --stage tag`. |
+| **Audit the parser** | `parser-qa --sample 25` — hand 25 cached filings to a model with the rows the parser produced and ask what it missed. Writes only its own findings table; it never edits a trade. |
 
 Each of these writes to the database, so **only one runs at a time** and they
 share the slot with a refresh: `prices` holds one sqlite write transaction open
@@ -546,6 +547,14 @@ running. There is no cancel button: stopping the portal stops the job with it.
 
 The **Committee timing** report has a `sector-matched` tick-box, which is the
 narrower arm described above.
+
+Two read-only reports come with those jobs. **Parser QA** runs the free half of
+the audit — the exact scan over every cached filing — and shows what the sampled
+model audits have found so far; it is declared preformatted in the report table,
+because its aligned columns *are* the output and a markdown pass would collapse
+them. **Committee jurisdiction** shows the committed table. Regenerating that
+table is deliberately not a portal job: the point of `--generate` is reading the
+diff, and the portal keeps only a job's last line of output.
 
 ## An MCP server, for agents
 
@@ -740,6 +749,172 @@ tests**: the Bonferroni correction inside the report covers the buckets within
 one arm, not the choice between arms. Running both and reporting whichever looks
 better is precisely the failure that correction exists to stop.
 
+### Checking the brief against the digest
+
+The system prompt shapes what `advise` writes. Nothing read the result, which
+left the failure this project actually worries about unmeasured: a brief that
+reads exactly like every other one while citing a ticker, a figure or a ranking
+the data never supported.
+
+```bash
+python -m congress_trades advise --check
+```
+
+The brief prints as usual, then a second pass audits it against the digest it
+was built from. Two halves, deliberately unequal:
+
+**Tickers and figures are checked by string, not by a model.** A symbol that
+appears nowhere in the digest was supplied by the model, and a comparison of
+text cannot itself hallucinate. On the first live run this caught
+`WMB (iShares Core MBS ETF)` — WMB is Williams Companies, and the fund name was
+invented wholesale.
+
+**Everything else is judgement**, so a model is asked and then held to the same
+bar `resolve` holds a proposed ticker to: every finding must quote the draft
+verbatim, and a finding whose quote is not in the draft is discarded and
+counted. A model asked to find fault will find some, and an invented quotation
+is how an audit starts manufacturing the very thing it exists to catch.
+
+It reports the kinds that matter here — a ranking presented as predictive when
+persistence is ~0, a bracket quoted as a position size, alpha quoted as skill,
+a recommendation without its disconfirming note — and it never edits the brief.
+
+The first version of the auditor flagged six claims that were the draft
+correctly hedging (*"this could be rebalancing"*), which the `advise` prompt
+explicitly requires. Speculation offered as an alternative is now excluded by
+name: a false positive in an audit is worse than in most places, because it
+teaches the reader to skim the findings.
+
+### Which industries a committee oversees
+
+`committee overlap` needs to know what a committee has jurisdiction over. That
+used to be seventeen hand-written rows matched as substrings against whatever
+name a seat carried, and its own docstring called it *editorial, not official*.
+Two things were wrong beyond the admission:
+
+- **It matched the wrong string.** A seat's name is the full committee name for
+  a full committee but a bare label for a subcommittee — and those repeat.
+  Three different committees have a subcommittee called *Health*, three more
+  have one called *Energy*. A substring test cannot tell them apart, and it gave
+  Appropriations' *Homeland Security* subcommittee a jurisdiction the list had
+  deliberately withheld from Appropriations.
+- **Seventeen needles never covered the 221 committees and subcommittees**
+  members actually sit on. Everything unlisted silently contributed nothing.
+
+So the table is generated once, reviewed, and committed as data in
+`seed/committee_sectors.json`. Nothing calls a model at analysis time —
+`sectors_for_seat` is a dict lookup keyed on the committee id.
+
+```bash
+python -m congress_trades jurisdiction              # the committed table
+python -m congress_trades jurisdiction --generate   # ask a model, diff, commit nothing
+python -m congress_trades jurisdiction --write      # commit what --generate proposed
+```
+
+`--generate` parks its raw answer in the cache so `--write` promotes it without
+asking again: asking twice could return something other than what you reviewed,
+which would make the review meaningless.
+
+The model does not get the last word. Three rules are applied to its answer,
+because each is a judgement about this project rather than about jurisdiction:
+
+- **The broad committees stay empty** — Appropriations, Budget, Rules, Ethics,
+  House Administration, Oversight, Foreign Affairs. Their reach is so wide that
+  tagging them flags nearly every trade. That was the original list's deliberate
+  omission, kept as a rule applied to the answer rather than as a request in a
+  prompt.
+- **No committee keeps more than five sectors.** More than that is a wildcard,
+  not a jurisdiction.
+- **"Unclassified" is never a jurisdiction.** It marks a ticker whose SIC lookup
+  failed, and letting it through would match every trade the lookup missed.
+
+Reviewing the diff is the point, and it earned its place immediately. Both
+generating runs produced bodies tagged *Agriculture* whose own justification was
+about something else — *"Defense procurement and military equipment oversight"*.
+`Agriculture` is the vocabulary's first value alphabetically, and constrained
+decoding has to emit *something* from the enum, so a model that cannot map its
+reasoning onto the vocabulary falls back to the first one. Every such tag came
+back at **low confidence** and none of them was correct, so low confidence is now
+dropped rather than discounted.
+
+One survived at *high* confidence — *Space and Aeronautics → Agriculture*,
+justified as "NASA oversight and space policy" — and is recorded in `OVERRIDES`
+with its reason, so a regeneration applies the correction again instead of
+losing it. Aerospace is SIC 372/376, which rolls up to Transportation Equipment:
+the same sector a trade in one of those companies would carry.
+
+The result: **68 of 221 bodies carry a jurisdiction.** The other 153 carry none,
+which is the correct answer for appropriations, budget, rules, ethics,
+administration, oversight and foreign affairs. It is still editorial, and the
+committed file says so in its own header. It exists to prompt a look, never as
+a finding.
+
+### Does the parser still read the filings?
+
+Every number here rests on `parse_house_ptr` reading a PDF that `pdftotext`
+mangled first, and the mangling is severe — headings collapse to bare letters,
+`Filing Status: New` comes out as `F      S      : New`, and a page break drops a
+repeated column header into the middle of a transaction. Commit `19d6694` is
+what that costs unnoticed: **4,506 equity trades parsed as untickered**, excluded
+from every return, scorecard and backtest, and described in this README as
+"municipal bonds, notes, funds — wealth preservation" until someone looked.
+
+Nothing would have caught that but reading the filings. So this reads them:
+
+```bash
+python -m congress_trades parser-qa --scan        # the exact pass, all filings, no model
+python -m congress_trades parser-qa --sample 25   # ...and ask a model about 25
+python -m congress_trades parser-qa --doc 20030803
+```
+
+Two passes that fail differently:
+
+**`scan` uses no model.** For each cached text it counts the transaction headers
+the parser's own pattern finds and compares that to the rows the parser
+returned. The pattern is how the parser locates a transaction, so a text where
+it matches more often than rows came back is a text the parser is dropping from.
+Exact, free, and it runs over all 910 cached filings.
+
+**`audit` hands a model the raw text beside the rows the parser produced** and
+asks one question: which transactions here are not in that list? This is the
+half that sees what the pattern cannot, because `scan` counts with the same
+pattern the parser uses and is blind by construction to a layout that pattern
+never matches.
+
+A model asked "what is missing" will always find something, so nothing it claims
+is believed. Each claimed row is checked back against the document — the date it
+cites must be in the text, the asset it names must be in the text, and it must
+not already be among the parsed rows — and only survivors are reported. Refuted
+claims stay in the count, because a pass that claims forty misses and verifies
+none has told you about the model, not about the parser.
+
+This is deliberately **not a pipeline stage**. It reads the cache, writes only
+its own `parser_audits` table, never edits a trade, and no collection run
+depends on it. A regression net, not a parser.
+
+**It found two live bugs on its first run, and both are now fixed.** Across the
+910 cached filings they cost **306 transactions**, every one of them an
+under-count — no wrong trade was ever recorded:
+
+- **241 transactions in 90 filings, lost to block splitting.** The parser split
+  the text on blank lines and took *one* transaction per block. But when a page
+  break lands inside a transaction the Clerk reprints the column header there
+  with no blank line, so two transactions share a block and the second was
+  discarded. Filing `20033446` alone lost 23 of its 473. Found by `scan`.
+- **65 transactions in 40 filings with type `E` (exchange).** The pattern
+  matched only `[PS]`. The deterministic scan was blind to this by construction
+  — it counts with the same pattern — and a model audit of 20 sampled filings
+  surfaced it on filing `20035106`, where the parser returned one row and the
+  document held two. Exactly the division of labour the two passes exist for.
+
+Fixing the first also corrected **26 asset names**: reading the *first* line
+before a match rather than the last picked up the previous transaction's
+trailing `Filing Status: New` — mangled by pdftotext into `F S : New` — as the
+asset name of 26 real trades, leaving them untickered and unscoreable.
+
+Both passes now come back clean, and `tests/test_checks.py` carries all three
+layouts so a regression says so.
+
 ### What this data cannot tell you
 
 Read this before treating any output as a signal. It is also in the system prompt,
@@ -822,11 +997,30 @@ If you fork this, keep the throttles.
 - **SIC is an old taxonomy.** It is authoritative and free, but classifies Apple as
   "Machinery & Computer Equipment" and Amazon as "Retail". Accurate for industrials,
   odd for megacap tech. The precise SEC label is kept alongside the rollup.
-- **Committee jurisdiction is a heuristic.** The committee → sector map in
-  `legislators.py` is editorial, matched on committee name, not official rules. It
-  exists to prompt a look, never to assert a finding. Broad committees
-  (Appropriations, Budget, Rules, Oversight) are deliberately excluded because they
-  would match nearly everything.
+- **Committee jurisdiction is a heuristic.** The committee → sector table in
+  `seed/committee_sectors.json` is editorial, generated once by a model from
+  committee names and reviewed, not official rules. It exists to prompt a look,
+  never to assert a finding. Broad committees (Appropriations, Budget, Rules,
+  Ethics, House Administration, Oversight, Foreign Affairs) are deliberately
+  excluded because they would match nearly everything. See
+  [Which industries a committee oversees](#which-industries-a-committee-oversees).
+- **The headline findings predate the parser fix.** The figures quoted through
+  this README — 33,128 disclosures, the walk-forward interval, the timing
+  buckets — were computed on a six-year backfill. The parser fix adds about 3%
+  more House rows and corrects 26 asset names, so those numbers will move
+  slightly when re-derived; re-running `backfill` over the full year range and
+  then `prices` is what re-derives them. Every correction is an *under-count
+  being fixed*, so a conclusion reversing is unlikely rather than impossible.
+  Re-run on the two years this working copy holds, none did: the filing-lag
+  curve kept every sign and every significance mark, and the before/after
+  meeting split was unchanged in direction. One timing bucket (−14 to −8 days)
+  did drop from corrected-significant to uncorrected-only, which is the kind of
+  movement a bucket sitting on the threshold does when the sample grows.
+- **Exchanges are not directional and are not scored.** The filings carry
+  transaction type `E`, and the Senate writes "Exchange" outright; both mean a
+  corporate action — a spinoff, a merger conversion — not a view on a price.
+  They are stored and displayed, and `alpha()` returns `None` for them. They
+  count toward neither side of a net flow.
 - **Filings contain errors.** Real ones seen in this data: a transaction dated
   `12/26/2026` but notified in January 2026, and a notification date of `03/28/1935`.
   Rows are stored as filed; the House filing date is taken from the Clerk's index
@@ -857,8 +1051,12 @@ python -m congress_trades timing --selftest      # widening correction + buckets
 python -m congress_trades alerts --selftest      # idempotence + no qualifier-only fires
 python -m congress_trades mix --selftest         # class partition + no invented tickers
 python3 tests/test_llm_and_resolve.py            # .env precedence, providers, ticker gates
+python3 tests/test_checks.py                     # jurisdiction rules, brief audit, parser net
 python -m congress_trades resolve --selftest     # every gate, no model and no network
 python -m congress_trades topics --selftest      # tag vocabulary matches the trades'
+python -m congress_trades jurisdiction --selftest # the rules a generated table must obey
+python -m congress_trades advise --selftest      # ticker, figure and quote gates
+python -m congress_trades parser-qa --selftest   # the scan, and 6 verification gates
 python -m congress_trades llm --selftest         # provider settings, no model called
 python -m congress_trades llm                    # LIVE round trip against your endpoint
 python -c 'from congress_trades import mcp_server; mcp_server.selftest()'
@@ -870,7 +1068,15 @@ tickers each of the gates refuses.
 
 The parser tests are the ones that matter: they run against real filing layouts, and
 they are what will fail first if the Clerk changes a PDF template or the Senate
-changes its table markup.
+changes its table markup. `tests/test_checks.py` carries the same filing layouts
+that the parser audit found real losses in, including one that the deterministic
+scan is blind to on purpose — so if `_H_TYPE` ever learns to match an exchange,
+that test says so rather than quietly passing.
+
+Beyond the parsers, the three passes that audit rather than produce are tested on
+what they *refuse*: a jurisdiction the rules overrule, a quote the auditor
+invented, a missing transaction the document does not corroborate. That is the
+part that decides whether a model's answer reaches the data.
 
 ## Data licensing
 

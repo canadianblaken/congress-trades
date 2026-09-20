@@ -12,7 +12,7 @@ import html
 import json
 from collections import Counter
 
-from . import db, legislators, scorecard
+from . import db, jurisdiction, scorecard
 from .config import CONFIG
 
 
@@ -45,7 +45,7 @@ def build_payload(conn) -> dict:
         full_committees = [x for x in seats if not x.get("parent")]
         covered: set[str] = set()
         for x in seats:                       # subcommittees carry jurisdiction too
-            covered.update(legislators.sectors_for_committee(x.get("name") or ""))
+            covered.update(jurisdiction.sectors_for_seat(x))
         mlist.append({
             "comm": [[cnames.setdefault(x["name"], len(cnames)), x.get("title") or ""]
                      for x in full_committees],

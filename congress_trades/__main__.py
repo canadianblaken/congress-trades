@@ -13,7 +13,8 @@ import logging
 import sys
 
 from . import (advise, alerts, assets, backtest, collect, committees, digest,
-               lag, llm, pipeline, prices, resolve, scorecard, topics)
+               jurisdiction, lag, llm, parserqa, pipeline, prices, resolve,
+               scorecard, topics)
 from .config import CONFIG
 from .publish import render
 
@@ -121,6 +122,36 @@ def main(argv=None) -> int:
     p.add_argument("--quiet", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
+    p = sub.add_parser("jurisdiction", help="which industries each committee "
+                       "oversees: a table generated once by a model and "
+                       "committed as data")
+    p.add_argument("--generate", action="store_true",
+                   help="ask a model about every committee on the roster and "
+                        "diff the answer against the committed table")
+    p.add_argument("--write", action="store_true",
+                   help="commit what --generate proposed to "
+                        "seed/committee_sectors.json, calling no model again")
+    p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("parser-qa", help="does the House parser still read the "
+                       "filings? An exact scan of every cached text, then a "
+                       "sampled model audit")
+    p.add_argument("--scan", action="store_true",
+                   help="the exact pass only: compare transaction headers found "
+                        "against rows returned, calling no model")
+    p.add_argument("--sample", type=int, default=25,
+                   help="how many cached filings to ask a model about (0 = all)")
+    p.add_argument("--doc", default="", help="audit one filing by DocID")
+    p.add_argument("--seed", type=int, default=0,
+                   help="the sample is deterministic, so a finding can be reproduced")
+    p.add_argument("--refresh", action="store_true",
+                   help="re-audit filings this model has already seen")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
     p = sub.add_parser("timing", help="do members trade around their own hearings?")
     p.add_argument("--floor", type=int, default=1)
     p.add_argument("--window", type=int, default=30)
@@ -169,6 +200,12 @@ def main(argv=None) -> int:
     p.add_argument("--days", type=int, default=90)
     p.add_argument("--floor", type=int, default=CONFIG.default_floor)
     p.add_argument("--dry-run", action="store_true", help="print the prompt, call nothing")
+    p.add_argument("--check", action="store_true",
+                   help="audit the reply against the digest afterwards: symbols "
+                        "and figures it invented, and claims the data does not "
+                        "support")
+    p.add_argument("--selftest", action="store_true",
+                   help="shape checks only, calling no model")
 
     sub.add_parser("publish", help="render the self-contained HTML page")
 
@@ -248,6 +285,18 @@ def main(argv=None) -> int:
         if args.seed:
             return committees.seed(CONFIG, force=True, quiet=args.quiet)
         return committees.collect(CONFIG, quiet=args.quiet)
+    if args.cmd == "jurisdiction":
+        if args.selftest:
+            jurisdiction.selftest(CONFIG)
+            return 0
+        return jurisdiction.run(CONFIG, args.generate, args.write, args.limit,
+                                args.quiet)
+    if args.cmd == "parser-qa":
+        if args.selftest:
+            parserqa.selftest(CONFIG)
+            return 0
+        return parserqa.run(CONFIG, args.scan, args.sample, args.doc, args.seed,
+                            args.refresh, args.dry_run, args.quiet)
     if args.cmd == "timing":
         if args.selftest:
             committees.selftest(CONFIG)
@@ -307,7 +356,11 @@ def main(argv=None) -> int:
         return resolve.run(CONFIG, args.scope, args.limit, args.dry_run,
                            args.apply, args.refresh, args.quiet)
     if args.cmd == "advise":
-        return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)
+        if args.selftest:
+            advise.selftest()
+            return 0
+        return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG,
+                          check=args.check)
     if args.cmd == "publish":
         return render(CONFIG)
     if args.cmd == "all":

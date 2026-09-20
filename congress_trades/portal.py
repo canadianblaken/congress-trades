@@ -79,6 +79,16 @@ REPORTS: dict[str, dict] = {
                   "blurb": "Who is trading and who is parking."},
     "alerts":    {"title": "Alerts",    "args": {"days": int}, "defaults": {"days": 14},
                   "blurb": "What crossed a bar recently. Never marks anything seen."},
+    "jurisdiction": {"title": "Committee jurisdiction", "args": {}, "defaults": {},
+                     "blurb": "Which industries each committee oversees. A table "
+                              "generated once by a model and committed as data; "
+                              "regenerating it is a CLI job, because the point of "
+                              "it is reading the diff."},
+    "parser-qa": {"title": "Parser QA", "args": {}, "defaults": {}, "pre": True,
+                  "blurb": "Does the House parser still read the filings? Counts "
+                           "transaction headers against rows returned across every "
+                           "cached filing, and shows what model audits have found. "
+                           "Calls no model itself."},
 }
 
 # The long-running commands, with their argv fixed here. Nothing from a request
@@ -109,6 +119,13 @@ JOBS: dict[str, dict] = {
         "argv": ["topics", "--stage", "tag"], "needs": ("model", "titles"),
         "blurb": "Read each title and record which industries it bears on. "
                  "Needed before the sector-matched timing arm can find anything."},
+    "parser-qa": {
+        "title": "Audit the parser", "verb": "Auditing",
+        "argv": ["parser-qa", "--sample", "25"], "needs": ("model", "filings"),
+        "blurb": "Hand 25 cached filings to a model with the rows the parser "
+                 "produced, and ask which transactions it missed. A sampled "
+                 "regression net, not a pipeline stage: it never edits a trade. "
+                 "The Parser QA report shows what it has found."},
 }
 
 # Written on start, removed on exit, so `portal stop` knows what to signal.
@@ -158,6 +175,11 @@ def _report_args(name: str, q: dict) -> list[str]:
     # next reader -- including the nightly job -- then comes back empty.
     if name == "alerts":
         out.append("--dry-run")
+    # A report must not call a model: it runs in a request thread on a 180s
+    # timeout and takes no lock. --scan is the free half; the sampled audit that
+    # does call a model is a JOB.
+    if name == "parser-qa":
+        out.append("--scan")
     return out
 
 
@@ -234,6 +256,11 @@ def _prereq() -> dict:
                 "WHERE title IS NOT NULL AND title != ''").fetchone()[0]
     except sqlite3.Error:
         titled = 0
+    try:
+        from . import parserqa
+        n_cached = len(parserqa.cached_docs(CONFIG))
+    except Exception:
+        n_cached = 0
     return {
         "model": model,
         "key": {"ok": key, "detail": "set" if key else "not set",
@@ -241,6 +268,11 @@ def _prereq() -> dict:
                        "https://api.congress.gov/sign-up/ — put it in .env."},
         "titles": {"ok": titled > 0, "detail": f"{titled:,} meetings have a title",
                    "why": "No meeting has a title yet. Fetch hearing titles first."},
+        "filings": {"ok": n_cached > 0,
+                    "detail": f"{n_cached:,} House filing texts cached",
+                    "why": "No House filing text is cached yet, and the audit "
+                           "reads the cache rather than fetching. Refresh the "
+                           "data first."},
     }
 
 
@@ -1095,7 +1127,12 @@ class Handler(BaseHTTPRequestHandler):
             if name not in REPORTS:
                 self._json({"error": "unknown report"}, 404); return
             rc, out = _run([name, *_report_args(name, q)])
-            self._json({"rc": rc, "html": md_to_html(out), "text": out,
+            # Some reports are aligned columns rather than markdown, and running
+            # those through the table parser collapses the alignment that IS the
+            # output. They declare that in REPORTS rather than being guessed at.
+            body = (f"<pre>{html.escape(out)}</pre>" if REPORTS[name].get("pre")
+                    else md_to_html(out))
+            self._json({"rc": rc, "html": body, "text": out,
                         "refreshing": _refresh["running"]})
             return
 

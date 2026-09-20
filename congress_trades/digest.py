@@ -17,7 +17,7 @@ import datetime as dt
 import statistics
 from collections import defaultdict
 
-from . import db, legislators, scorecard
+from . import db, jurisdiction, scorecard
 from .config import CONFIG
 
 
@@ -52,7 +52,11 @@ def convergence(rows, limit=20):
                               "rets": []})
     for r in rows:
         o = by[r["ticker"]]
-        o["buys" if r["tx_type"] == "buy" else "sells"] += 1
+        # An exchange is neither side, so it counts toward neither. Bucketing it
+        # as a sell -- which "else" did -- would move the net flow on a trade
+        # that expressed no view.
+        if r["tx_type"] in ("buy", "sell"):
+            o["buys" if r["tx_type"] == "buy" else "sells"] += 1
         o["members"].add(r["member"])
         o["max"] = max(o["max"], r["amount_min"] or 0)
         d = scored_alpha(r)
@@ -70,7 +74,8 @@ def sector_flow(rows, sectors, limit=12):
     for r in rows:
         k = (sectors.get(r["ticker"]) or {}).get("sector") or "Unclassified"
         o = by[k]
-        o["buy" if r["tx_type"] == "buy" else "sell"] += 1
+        if r["tx_type"] in ("buy", "sell"):
+            o["buy" if r["tx_type"] == "buy" else "sell"] += 1
         o["tickers"].add(r["ticker"])
     out = [{"sector": k, "net": v["buy"] - v["sell"], **v} for k, v in by.items()]
     out.sort(key=lambda o: -abs(o["net"]))
@@ -110,7 +115,7 @@ def committee_overlap(rows, members, seats, sectors, limit=20):
         bio = (members.get(r["member"]) or {}).get("bioguide") or ""
         covered = set()
         for s in seats.get(bio, []):
-            covered.update(legislators.sectors_for_committee(s.get("name") or ""))
+            covered.update(jurisdiction.sectors_for_seat(s))
         if sec in covered:
             out.append({"r": r, "sector": sec})
     out.sort(key=lambda p: -(p["r"]["amount_min"] or 0))

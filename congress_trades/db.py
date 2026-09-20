@@ -132,6 +132,21 @@ CREATE TABLE IF NOT EXISTS asset_labels (
     updated_at TEXT
 );
 
+-- What a parser audit made of one cached filing text. Not part of any pipeline:
+-- a regression net over filings already collected, so a template change that
+-- starts dropping rows is caught by a periodic run rather than by noticing the
+-- totals look wrong a year later. Dropping this table loses nothing but history.
+CREATE TABLE IF NOT EXISTS parser_audits (
+    doc_id     TEXT PRIMARY KEY,
+    n_parsed   INTEGER,             -- rows the parser returned for this text
+    n_pattern  INTEGER,             -- transaction headers the pattern finds in it
+    n_claimed  INTEGER,             -- rows a model said were missing
+    n_verified INTEGER,             -- ...of those, how many the text corroborates
+    detail     TEXT,                -- JSON: the verified misses, with their evidence
+    model      TEXT NOT NULL,       -- '' when only the deterministic scan ran
+    updated_at TEXT
+);
+
 -- What each committee meeting was actually about. Titles come from Congress.gov;
 -- the sector tags are a model's reading of the title.
 CREATE TABLE IF NOT EXISTS meeting_topics (

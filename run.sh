@@ -17,6 +17,11 @@
 #   ./run.sh topics --stage fetch --since 2025-01-01   meeting titles (needs a key)
 #   ./run.sh topics --stage tag                        tag those titles by industry
 #   ./run.sh timing --sector-matched                   the narrower timing arm
+#   ./run.sh advise --check       write the brief, then audit it against the digest
+#   ./run.sh parser-qa --scan     do the parsers still read the filings? (no model)
+#   ./run.sh parser-qa --sample 25             ...and ask a model about 25 of them
+#   ./run.sh jurisdiction         which industries each committee oversees
+#   ./run.sh jurisdiction --generate           regenerate that table, then --write
 #
 # Linux and macOS both. Nothing below needs bash 4 -- macOS still ships 3.2 as
 # /bin/bash -- and the two tools that exist only on Linux, flock and xdg-open,
@@ -141,10 +146,12 @@ take_lock() {
 run_locked() {
   local sub=$1
   shift
-  # `llm` only talks to the model endpoint, and `advise` only reads. `resolve`
-  # and `topics` are deliberately absent: both write to the database, so both
-  # belong behind the same lock as collection.
-  case " digest scorecard backtest lag timing mix advise llm " in
+  # `llm` only talks to the model endpoint, and `advise` only reads. `jurisdiction`
+  # reads member_committees and writes a file in seed/, never the database, so it
+  # does not need the lock either. `resolve`, `topics` and `parser-qa` are
+  # deliberately absent: all three write to the database, so all three belong
+  # behind the same lock as collection.
+  case " digest scorecard backtest lag timing mix advise llm jurisdiction " in
     *" $sub "*) "$PY" -m congress_trades "$@" ; return $? ;;
   esac
   take_lock

@@ -194,54 +194,13 @@ def wiki_summary(cfg: Config, title: str, max_age: float | None = None,
     return {}
 
 
-# Committee jurisdiction -> the sectors it plausibly covers.
-#
-# EDITORIAL, NOT OFFICIAL. Real jurisdiction is defined by chamber rules and is messier
-# than any keyword map. This exists to surface "traded in an industry their committee
-# oversees" as a prompt to go look, never as a finding.
-#
-# Deliberately omitted: Appropriations, Budget, Rules, Ethics, Oversight, Foreign
-# Affairs. Their reach is so broad that flagging them would match nearly every trade
-# and drown the signal.
-COMMITTEE_SECTORS: list[tuple[str, tuple[str, ...]]] = [
-    ("agriculture", ("Agriculture", "Food & Beverage")),
-    ("armed services", ("Transportation Equipment", "Electronics & Electrical Equipment",
-                        "Instruments & Medical Devices")),
-    ("energy and commerce", ("Utilities & Power", "Communications", "Pharma & Chemicals",
-                             "Software & IT Services", "Healthcare Services")),
-    ("energy and natural resources", ("Utilities & Power", "Mining & Energy Extraction",
-                                      "Petroleum Refining")),
-    ("natural resources", ("Mining & Energy Extraction", "Petroleum Refining",
-                           "Utilities & Power")),
-    ("commerce, science", ("Communications", "Transportation & Logistics",
-                           "Software & IT Services", "Semiconductors")),
-    ("financial services", ("Banking & Finance", "Insurance", "Real Estate",
-                            "Funds & Holding Companies", "Real Estate (REIT)")),
-    ("banking, housing", ("Banking & Finance", "Insurance", "Real Estate",
-                          "Funds & Holding Companies", "Real Estate (REIT)")),
-    ("health", ("Healthcare Services", "Pharma & Chemicals", "Instruments & Medical Devices")),
-    ("transportation and infrastructure", ("Transportation & Logistics",
-                                           "Transportation Equipment",
-                                           "Construction & Engineering")),
-    ("science, space", ("Software & IT Services", "Semiconductors",
-                        "Electronics & Electrical Equipment")),
-    ("homeland security", ("Software & IT Services", "Professional Services")),
-    ("veterans", ("Healthcare Services",)),
-    ("intelligence", ("Software & IT Services", "Electronics & Electrical Equipment",
-                      "Communications Equipment")),
-    ("judiciary", ("Software & IT Services",)),
-    ("ways and means", ("Banking & Finance", "Insurance", "Healthcare Services")),
-    ("small business", ()),
-]
-
-
-def sectors_for_committee(name: str) -> tuple[str, ...]:
-    n = (name or "").lower()
-    out: set[str] = set()
-    for needle, secs in COMMITTEE_SECTORS:
-        if needle in n:
-            out.update(secs)
-    return tuple(sorted(out))
+# Committee jurisdiction moved to jurisdiction.py, where it is generated from the
+# actual committee and subcommittee names rather than matched as a substring
+# against seventeen hand-written needles. The old table could not tell three
+# different subcommittees called "Health" apart, and gave Appropriations'
+# "Homeland Security" subcommittee a jurisdiction the list had deliberately
+# withheld from Appropriations. Callers want jurisdiction.sectors_for_seat(seat),
+# which takes the whole seat and keys on its committee id.
 
 
 def committees(cfg: Config, force: bool = False) -> dict[str, list[dict]]:
