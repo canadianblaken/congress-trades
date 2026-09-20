@@ -37,6 +37,16 @@ from .config import Config, user_agent
 log = logging.getLogger("hermes_trends.congress")
 TIMEOUT = 30
 
+
+class MissingTool(RuntimeError):
+    """An external binary the collector cannot work without is not installed.
+
+    Kept apart from ordinary per-filing failures on purpose: those are logged and
+    skipped, and a missing converter would otherwise skip every House filing with
+    a warning apiece and hand back an empty, plausible-looking dataset.
+    """
+
+
 # --- House PDF layout -------------------------------------------------------------
 # "P  07/24/2026 07/24/2026" -- type letter then transaction date then notification date.
 _H_TYPE = re.compile(r"\b([PS])\b(?:\s*\(partial\))?\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}/\d{2}/\d{4})")
@@ -116,8 +126,17 @@ def _house_ptr_text(cfg: Config, year: str, doc_id: str) -> str:
     with tempfile.NamedTemporaryFile(suffix=".pdf") as tmp:
         tmp.write(r.content)
         tmp.flush()
-        out = subprocess.run(["pdftotext", "-layout", tmp.name, "-"],
-                             capture_output=True, text=True, timeout=90)
+        try:
+            out = subprocess.run(["pdftotext", "-layout", tmp.name, "-"],
+                                 capture_output=True, text=True, timeout=90)
+        except FileNotFoundError:
+            raise MissingTool(
+                "pdftotext is not on PATH, and House filings are PDFs. Install "
+                "Poppler:\n"
+                "      brew install poppler              # macOS\n"
+                "      sudo apt install poppler-utils    # Debian/Ubuntu\n"
+                "      sudo dnf install poppler-utils    # Fedora/RHEL"
+            ) from None
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(out.stdout, encoding="utf-8")
     return out.stdout
@@ -192,6 +211,8 @@ def house_transactions(cfg: Config, years: list[str], progress=None) -> list[dic
         for i, f in enumerate(filings):
             try:
                 text = _house_ptr_text(cfg, f["year"], f["doc_id"])
+            except MissingTool:
+                raise                     # not this filing's problem; stop the run
             except Exception as e:
                 log.warning("house PTR %s unreadable: %s", f["doc_id"], e)
                 continue

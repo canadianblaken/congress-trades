@@ -23,6 +23,12 @@
 #   NOTIFY_CMD='curl -sX POST -d @- https://ntfy.sh/your-topic'
 #   NOTIFY_CMD='/usr/local/bin/notify-my-phone'
 #
+# Everything goes through run.sh rather than calling python3 directly. It picks an
+# interpreter new enough for the code -- cron hands you a bare PATH, and on macOS
+# that means Apple's 3.9, which cannot import this package -- and it takes the
+# write lock, so a nightly firing while you have a manual refresh open waits its
+# turn instead of both of them hitting "database is locked".
+#
 # No `set -e`: a failed LLM call or notifier must not cost you the note.
 set -uo pipefail
 
@@ -39,12 +45,14 @@ KEEP_DAYS=${KEEP_DAYS:-90}
 mkdir -p "$NOTES" || exit 1
 cd "$REPO" || exit 1
 
+CT="$REPO/run.sh"
+
 DATE=$(date +%F)
 NOTE="$NOTES/congress-$DATE.md"
 
 # Data first. Publish is only reached if collection succeeded, so a bad night
 # leaves yesterday's rendered page in place rather than replacing it with less.
-if ! python3 -m congress_trades all; then
+if ! "$CT" all; then
   echo "collect failed; leaving the existing page and note alone" >&2
   exit 1
 fi
@@ -52,9 +60,9 @@ fi
 # Read the alerts WITHOUT recording them. A recording call marks everything seen,
 # so any later query -- including the one that builds the notification headline --
 # comes back empty. Recording happens at the end, once they have been used.
-ALERTS=$(python3 -m congress_trades alerts --days "$WINDOW" --dry-run)
+ALERTS=$("$CT" alerts --days "$WINDOW" --dry-run)
 HAVE_ALERTS=$?
-HEADLINE=$(python3 -m congress_trades alerts --days "$WINDOW" --dry-run --headline)
+HEADLINE=$("$CT" alerts --days "$WINDOW" --dry-run --headline)
 
 {
   if [ "$HAVE_ALERTS" -eq 0 ]; then
@@ -62,14 +70,14 @@ HEADLINE=$(python3 -m congress_trades alerts --days "$WINDOW" --dry-run --headli
   else
     printf 'Quiet day: nothing crossed a bar.\n\n---\n\n'
   fi
-  python3 -m congress_trades digest --days 90
+  "$CT" digest --days 90
 } > "$NOTE" || exit 1
 
 if [ "$HAVE_ALERTS" -eq 0 ]; then
   # The LLM read costs tokens and attention, so it runs only on a day that had
   # something cross a bar.
   if [ -n "${CONGRESS_LLM_MODEL:-}" ]; then
-    if ADVICE=$(python3 -m congress_trades advise --days 90 2>&1); then
+    if ADVICE=$("$CT" advise --days 90 2>&1); then
       printf '\n---\n\n# Analysis (%s)\n\n%s\n' "$CONGRESS_LLM_MODEL" "$ADVICE" >> "$NOTE"
     else
       printf '\n---\n\nAnalysis unavailable: %s\n' "$ADVICE" >> "$NOTE"
@@ -83,7 +91,7 @@ if [ "$HAVE_ALERTS" -eq 0 ]; then
 
   # Mark them seen only now. A crash above then leaves the backlog intact for the
   # next run instead of silently swallowing it.
-  python3 -m congress_trades alerts --days "$WINDOW" >/dev/null
+  "$CT" alerts --days "$WINDOW" >/dev/null
 fi
 
 find "$NOTES" -name 'congress-*.md' -mtime +"$KEEP_DAYS" -delete 2>/dev/null || true

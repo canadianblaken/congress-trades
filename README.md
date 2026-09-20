@@ -66,6 +66,11 @@ cd congress-trades
 pip install -r requirements.txt
 ```
 
+Needs **Python 3.10 or newer**. Linux distributions ship that already; macOS
+does not — its built-in `python3` is 3.9, so `brew install python@3.12` (or any
+3.10+). `./run.sh` finds a newer interpreter on its own and says which it picked,
+or you can name one with `PYTHON=/path/to/python3.12 ./run.sh`.
+
 Also needs **`pdftotext`** (from Poppler) on your PATH — House filings are PDFs:
 
 ```bash

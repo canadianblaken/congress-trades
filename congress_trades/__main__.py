@@ -12,7 +12,7 @@ import json
 import logging
 import sys
 
-from . import (advise, alerts, assets, backtest, committees, digest,
+from . import (advise, alerts, assets, backtest, collect, committees, digest,
                lag, pipeline, prices, scorecard)
 from .config import CONFIG
 from .publish import render
@@ -265,4 +265,10 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        rc = main()
+    except collect.MissingTool as e:
+        # A traceback would bury the one line that tells you what to install.
+        print(f"error: {e}", file=sys.stderr)
+        rc = 2
+    raise SystemExit(rc)
