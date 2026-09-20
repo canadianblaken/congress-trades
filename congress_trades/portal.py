@@ -19,6 +19,7 @@ until it commits.
 """
 from __future__ import annotations
 
+import bisect
 import html
 import json
 import re
@@ -32,6 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
+from . import prices
 from .config import CONFIG
 
 HOST = "127.0.0.1"
@@ -539,6 +541,63 @@ def api_facets() -> dict:
         return {"members": [], "tickers": [], "error": str(e)}
 
 
+def _price_trend(sym: str, marks: list[dict]) -> dict:
+    """The cached close series for one name, bucketed to keep the line readable.
+
+    Daily closes over ten years are 2,500 points in a 150px panel chart: past
+    roughly a year the noise stops being information, so longer spans collapse to
+    the last close of each week or month. The disclosures ride on the same
+    buckets, which is the whole point of drawing them together -- you are looking
+    for whether Congress moved before the line did."""
+    s = prices.cached(sym)
+    if not s:
+        return {}
+    days = sorted(d for d in s if isinstance(s.get(d), (int, float)))
+    if len(days) < 8:
+        return {}
+    # Start a little before the first disclosure: the run-up is context, but the
+    # decade of price history before anyone in Congress touched the name is not.
+    first = min((m["d"] for m in marks if m["d"]), default="")
+    if first:
+        try:
+            start = (dt.date.fromisoformat(first) - dt.timedelta(days=120)).isoformat()
+            days = [d for d in days if d >= start] or days
+        except ValueError:
+            pass
+    span = (dt.date.fromisoformat(days[-1]) - dt.date.fromisoformat(days[0])).days
+    bucket = "day" if span <= 420 else "week" if span <= 2600 else "month"
+
+    def key(d: str) -> str:
+        if bucket == "day":
+            return d
+        if bucket == "month":
+            return d[:7]
+        day = dt.date.fromisoformat(d)
+        return (day - dt.timedelta(days=day.weekday())).isoformat()
+
+    closes: dict[str, tuple[str, float]] = {}
+    for d in days:                         # last close wins, so each bucket ends where it ended
+        closes[key(d)] = (d, float(s[d]))
+    labels = sorted(closes)
+    buys = [0] * len(labels)
+    sells = [0] * len(labels)
+    for m in marks:
+        if not m["d"]:
+            continue
+        # A disclosure landing on a Saturday or a holiday has no bucket of its own,
+        # so it attaches to the next one that exists -- the same forward walk the
+        # return calculation uses. Exact matching silently drops a third of them.
+        i = bisect.bisect_left(labels, key(m["d"]))
+        if i >= len(labels):
+            i = len(labels) - 1            # disclosed after the last cached close
+        buys[i] += m["buys"] or 0
+        sells[i] += m["sells"] or 0
+    return {"bucket": bucket, "labels": labels,
+            "close": [round(closes[k][1], 4) for k in labels],
+            "asof": [closes[k][0] for k in labels],
+            "buys": buys, "sells": sells}
+
+
 def api_ticker(sym: str, q: dict) -> dict:
     """Everything known about one name, for the click-through from a chart bar.
 
@@ -603,6 +662,13 @@ def api_ticker(sym: str, q: dict) -> dict:
                       SUM(CASE WHEN LOWER(tx_type) LIKE 's%' THEN 1 ELSE 0 END) sells
                  FROM congress_trades WHERE ticker = ? AND ym != ''
                 GROUP BY ym ORDER BY ym""", (sym,)).fetchall()]
+        marks = [dict(r) for r in conn.execute(
+            """SELECT COALESCE(NULLIF(disclosed,''), tx_date) d,
+                      SUM(CASE WHEN LOWER(tx_type) LIKE 'b%' THEN 1 ELSE 0 END) buys,
+                      SUM(CASE WHEN LOWER(tx_type) LIKE 's%' THEN 1 ELSE 0 END) sells
+                 FROM congress_trades
+                WHERE ticker = ? AND COALESCE(NULLIF(disclosed,''), tx_date) != ''
+                GROUP BY d ORDER BY d""", (sym,)).fetchall()]
         conn.close()
     except sqlite3.Error as e:
         return {"error": str(e)}
@@ -621,7 +687,8 @@ def api_ticker(sym: str, q: dict) -> dict:
     return {"ticker": sym, "asset_name": name["asset_name"] if name else "",
             "sector": sector["sector"] if sector else "", "agg": a,
             "alpha_med": med, "alpha_n": len(alphas),
-            "members": members, "recent": recent, "months": months}
+            "members": members, "recent": recent, "months": months,
+            "price": _price_trend(sym, marks)}
 
 
 def api_member(name: str) -> dict:
@@ -651,7 +718,11 @@ def api_member(name: str) -> dict:
                 WHERE t.member = ?""", (name,)).fetchone()
         prof["agg"] = dict(agg) if agg else {}
         prof["top"] = [dict(r) for r in conn.execute(
-            """SELECT ticker, COUNT(*) n FROM congress_trades
+            """SELECT ticker, COUNT(*) n,
+                      SUM(CASE WHEN LOWER(tx_type) LIKE 'b%' THEN amount_min
+                               WHEN LOWER(tx_type) LIKE 's%' THEN -amount_min
+                               ELSE 0 END) net
+                 FROM congress_trades
                 WHERE member = ? AND ticker != '' GROUP BY ticker
                 ORDER BY n DESC LIMIT 12""", (name,)).fetchall()]
         conn.close()
@@ -1221,6 +1292,79 @@ async function rows(){
   if(next) next.onclick=()=>{st.offset+=st.limit; rows();};
 }
 
+// The price line is the context the disclosure counts lack: bars tell you when
+// Congress moved, this tells you what the name was doing when they did. Same line
+// treatment as Recent activity on the overview, so the two read as one chart type.
+function drawPrice(d){
+  const p=d.price; if(!p||!(p.labels||[]).length) return;
+  const up=(d.agg.net||0)>=0, line=up?C.buy:C.sell;
+  const grain=p.bucket==='day'?'Daily closes'
+    :p.bucket==='week'?'Weekly closes' : 'Monthly closes';
+  // On a name Congress discloses most weeks, ringing every bucket draws the line
+  // twice and says nothing. There the rings thin out to the heaviest periods; the
+  // bars below still carry the full timing, and a hover still reports every count.
+  const hit=p.labels.filter((_,i)=>p.buys[i]||p.sells[i]).length;
+  const dense=hit>p.labels.length*.45;
+  const nz=p.buys.concat(p.sells).filter(n=>n>0).sort((a,b)=>a-b);
+  const cut=dense?Math.max(2,nz[Math.floor(nz.length*.75)]||2):1;
+  const keep=arr=>arr.map(n=>n>=cut?n:0);
+  const cap=$('#px-cap');
+  if(cap) cap.textContent=`${grain} from the last refresh, over the span this name has `+
+    `been disclosed in. The line is ${up?'blue: Congress is a net buyer'
+      :'red: Congress is a net seller'} of it. `+(dense
+      ? `It is disclosed in most ${p.bucket==='month'?'months':p.bucket==='week'?'weeks':'sessions'}, `+
+        `so only periods of ${cut} or more are marked -- blue circles are buys, just `+
+        `under the line, red diamonds sells, just above it. Hover any point for the `+
+        `full count.`
+      : `Marks sit where the disclosures land, sized by how many: blue circles are `+
+        `buys, just under the line, red diamonds sells, just above it.`);
+  // A marker sits on the close, so it reads as a point on the line rather than a
+  // second series floating beside it. Radius grows with the square root of the
+  // count: area, not radius, is what the eye compares. The rings are hollow and
+  // the price line is drawn last, on top of them -- on a name Congress trades
+  // every week a wall of filled dots erases the very line it is annotating.
+  const dot=n=>n?Math.min(2.6+Math.sqrt(n),6.5):0;
+  // Buys ride just under the close and sells just above it, the way a trading
+  // chart marks them: a day that carries both would otherwise stack one marker
+  // exactly on the other and show only whichever drew last.
+  const lo=Math.min(...p.close), hi=Math.max(...p.close), off=(hi-lo)*.03||.01;
+  const at=(arr,d)=>p.labels.map((_,i)=>arr[i]?p.close[i]+d*off:null);
+  const marker=(arr,color,style,d)=>({data:at(arr,d),showLine:false,pointStyle:style,
+    pointRadius:arr.map(dot),pointHoverRadius:arr.map(n=>n?dot(n)+2:0),
+    pointBackgroundColor:C.surface,pointBorderColor:color,pointBorderWidth:1.6,
+    borderColor:color,backgroundColor:color});
+  // The line is drawn first and faded: it is the backdrop, and at full strength a
+  // blue net-buyer's line swallows the blue buy rings it is meant to carry. The
+  // markers keep the full hue, because that is where blue and red have to mean
+  // buy and sell.
+  paint('c-px',{type:'line',data:{labels:p.labels,
+      datasets:[{label:'Close',data:p.close,borderColor:fade(line,.5),
+          backgroundColor:fade(line,.5),borderWidth:1.6,pointRadius:0,
+          pointHoverRadius:5,tension:.25},
+        Object.assign({label:'Buys'},marker(keep(p.buys),C.buy,'circle',-1)),
+        Object.assign({label:'Sells'},marker(keep(p.sells),C.sell,'rectRot',1))]},
+    options:{maintainAspectRatio:false,responsive:true,
+      interaction:{mode:'index',intersect:false},
+      plugins:{legend:{display:true,position:'top',align:'end',
+          labels:{boxWidth:9,boxHeight:9,usePointStyle:true,padding:12,
+            filter:i=>i.text!=='Close'}},
+        // Counts come from the data rather than from the markers, so a bucket
+        // whose marker was thinned away still answers when you hover it.
+        tooltip:Object.assign({},tip,{filter:i=>i.datasetIndex===0,callbacks:{
+          title:i=>p.asof[i[0].dataIndex],
+          label:c=>`close ${px(p.close[c.dataIndex])}`,
+          afterBody:i=>{const k=i[0].dataIndex, out=[];
+            if(p.buys[k]) out.push(`${p.buys[k]} buy${p.buys[k]===1?'':'s'} disclosed`);
+            if(p.sells[k]) out.push(`${p.sells[k]} sell${p.sells[k]===1?'':'s'} disclosed`);
+            return out;}}})},
+      scales:{x:axis({grid:{display:false},ticks:{color:C.faint,maxTicksLimit:6,
+          callback:function(v){const l=p.labels[v]||''; return p.bucket==='month'?l:l.slice(0,7);}}}),
+        // One precision for the whole axis: px() drops cents above $100, which on a
+        // scale crossing it prints $240 next to $80.00.
+        y:axis({ticks:{color:C.faint,padding:6,
+          callback:v=>hi<100?'$'+v.toFixed(2):'$'+Math.round(v).toLocaleString()}})}}});
+}
+
 async function member(name){
   document.querySelectorAll('.panel').forEach(p=>p.remove());
   const d=await (await fetch('/api/member?name='+encodeURIComponent(name))).json();
@@ -1241,6 +1385,7 @@ async function member(name){
       ${d.nominate!=null?`<b>DW-NOMINATE</b><span>${d.nominate.toFixed(2)}</span>`:''}
     </div>
     ${(d.top||[]).length?`<h3>Most-traded</h3>
+      <p class="note">Bar length is how many disclosures; blue is net buying, red net selling.</p>
       <div class="canvas-wrap" id="w-mem" style="height:${Math.min(d.top.length,12)*22+30}px">
         <canvas id="c-mem"></canvas></div>`:''}
     ${(d.committees||[]).length?`<h3>Committees</h3><div>${d.committees.map(c=>
@@ -1250,16 +1395,20 @@ async function member(name){
   document.body.appendChild(el);
   annotate(el);
   if((d.top||[]).length){
-    // One series, one hue: these are counts for a single person, so a second
-    // colour would encode nothing. The name is the label; no legend needed.
+    // Length is how often they traded the name; colour is which way it went on
+    // balance -- blue net buying, red net selling -- the same rule the trend
+    // charts use, so a reader carries one reading across the whole portal.
     paint('c-mem',{type:'bar',data:{labels:d.top.map(t=>t.ticker),
-        datasets:[{data:d.top.map(t=>t.n),backgroundColor:C.buy,borderWidth:0,
+        datasets:[{data:d.top.map(t=>t.n),
+          backgroundColor:d.top.map(t=>(t.net||0)>=0?C.buy:C.sell),borderWidth:0,
           borderRadius:3,borderSkipped:'start',barPercentage:.8,categoryPercentage:.9}]},
       options:{indexAxis:'y',maintainAspectRatio:false,responsive:true,
         onClick:(ev,els)=>{ if(els&&els.length) tickerPanel(d.top[els[0].index].ticker); },
         onHover:(ev,els)=>{ ev.native.target.style.cursor=els.length?'pointer':'default'; },
         plugins:{legend:{display:false},tooltip:Object.assign({},tip,{callbacks:{
-          label:c=>`${c.parsed.x} disclosure${c.parsed.x===1?'':'s'}`}})},
+          label:c=>{const t=d.top[c.dataIndex];
+            return [`${c.parsed.x} disclosure${c.parsed.x===1?'':'s'}`,
+              `${t.net>0?'net buying':t.net<0?'net selling':'balanced'}: ${money(t.net||0)}`];}}})},
         scales:{x:axis({ticks:{color:C.faint,padding:4,precision:0}}),
           y:axis({grid:{display:false},ticks:{color:C.ink,padding:4}})}}});
   }
@@ -1342,6 +1491,9 @@ addEventListener('scroll',()=>tipbox.classList.remove('on'),{passive:true});
 // validates against this surface for contrast and colour-vision separation.
 const C={buy:'#3987e5',sell:'#e66767',ink:'#9aa4b2',faint:'#6b7480',
   grid:'rgba(255,255,255,.07)',surface:'#12161c'};
+// Same hue, less weight -- for marks that have to sit behind something else.
+const fade=(hex,a)=>`rgba(${parseInt(hex.slice(1,3),16)},${parseInt(hex.slice(3,5),16)},${
+  parseInt(hex.slice(5,7),16)},${a})`;
 const charts={};
 function paint(id,cfg){
   const el=document.getElementById(id); if(!el) return;
@@ -1355,6 +1507,10 @@ function paint(id,cfg){
 }
 const money=v=>{const a=Math.abs(v);
   return (v<0?'-$':'$')+(a>=1e6?(a/1e6).toFixed(1)+'M':a>=1e3?(a/1e3).toFixed(0)+'k':a);};
+// Share prices need the cents that money() throws away, and never the k/M step:
+// a $1,200 close is $1,200, not $1k.
+const px=v=>'$'+Number(v).toLocaleString(undefined,
+  {minimumFractionDigits:v<100?2:0,maximumFractionDigits:2});
 // Hairline grid, no border, ticks in muted ink -- chrome stays recessive so the
 // bars carry the reading.
 const axis=(extra={})=>Object.assign({grid:{color:C.grid,drawBorder:false,drawTicks:false},
@@ -1435,18 +1591,21 @@ async function drawTop(){
     $('#w-top').innerHTML='<div class="nochart">No matching trades.</div>';
     if(box) box.innerHTML=''; return; }
   const m=tstate.metric;
-  // Net flow is a diverging scale about zero, so it sorts by signed value and the
-  // two hues mean direction. The other three are plain magnitude: one hue, no
-  // legend, because a second colour there would encode nothing.
+  // Colour means direction on every metric here: blue where the name is net
+  // bought over the window, red where it is net sold. Length still carries the
+  // metric the reader picked, so the two channels answer different questions --
+  // how much, and which way. Under net flow they agree by construction, because
+  // there the bar itself is the signed number.
   const rows=m==='net'?d.rows.slice().sort((a,b)=>b.net-a.net):d.rows;
   const vals=rows.map(r=>m==='members'?r.members:m==='count'?r.count:m==='volume'?r.volume:r.net);
   const dollars=(m==='net'||m==='volume');
-  cap.textContent=m==='net'
-    ? 'Disclosed buying minus selling per name. Blue is net accumulation, red net disposal; ordered by size in either direction, because a name Congress dumped says as much as one it bought.'
+  const hue=' Blue is a name Congress is net buying over this window, red net selling.';
+  cap.textContent=(m==='net'
+    ? 'Disclosed buying minus selling per name, ordered by size in either direction, because a name Congress dumped says as much as one it bought.'
     : m==='volume' ? 'Disclosed dollars traded per name, buys and sells together.'
     : m==='count' ? 'Number of disclosures per name.'
-    : 'How many different members traded the name -- the convergence signal, hardest to skew with one heavy trader.';
-  const colors=m==='net'?vals.map(v=>v>=0?C.buy:C.sell):C.buy;
+    : 'How many different members traded the name -- the convergence signal, hardest to skew with one heavy trader.')+hue;
+  const colors=rows.map(r=>r.net>=0?C.buy:C.sell);
   $('#w-top').style.height=Math.max(220,rows.length*26+46)+'px';
   paint('c-top',{type:'bar',data:{labels:rows.map(r=>r.ticker),
       datasets:[{label:METRICS.find(x=>x[0]===m)[1],data:vals,backgroundColor:colors,
@@ -1458,11 +1617,16 @@ async function drawTop(){
       onHover:(ev,els)=>{ ev.native.target.style.cursor=els.length?'pointer':'default'; },
       plugins:{legend:{display:false},tooltip:Object.assign({},tip,{callbacks:{
         label:c=>{const r=rows[c.dataIndex];
+          // The bar no longer states its own direction once the metric is a
+          // magnitude, so the net figure that drives the colour is spelled out.
+          const dir=r.net>0?'net buying':r.net<0?'net selling':'balanced';
           return dollars?[`${METRICS.find(x=>x[0]===m)[1]}: ${money(vals[c.dataIndex])}`,
             `bought ${money(r.buy_vol)} in ${r.buys}, sold ${money(r.sell_vol)} in ${r.sells}`,
-            `${r.members} member${r.members===1?'':'s'}`]
+            `${r.members} member${r.members===1?'':'s'}`,
+            ...(m==='net'?[]:[`${dir}: ${money(r.net)}`])]
             :[`${vals[c.dataIndex].toLocaleString()}`,
-              `${r.buys} buys, ${r.sells} sells, ${r.members} members`];}}})},
+              `${r.buys} buys, ${r.sells} sells, ${r.members} members`,
+              `${dir}: ${money(r.net)}`];}}})},
       scales:{x:axis({ticks:{color:C.faint,padding:6,
           callback:v=>dollars?money(v):v.toLocaleString()},
         grid:{color:C.grid,drawBorder:false,drawTicks:false}}),
@@ -1527,6 +1691,11 @@ async function tickerPanel(sym){
       <b>first seen</b><span>${esc(a.first_seen||'')}</span>
       <b>latest</b><span>${esc(a.last_seen||'')}</span>
     </div>
+    ${(d.price&&(d.price.labels||[]).length>2)?`<h3>Price trend</h3>
+      <p class="cap" id="px-cap"></p>
+      <div class="canvas-wrap" id="w-px" style="height:190px"><canvas id="c-px"></canvas></div>`
+      :`<p class="note">No cached closes for this name, so there is no price line.
+        <code>prices</code> fetches them on a refresh.</p>`}
     ${d.months.length>1?`<h3>Disclosures per month</h3>
       <div class="canvas-wrap" id="w-tk" style="height:150px"><canvas id="c-tk"></canvas></div>`:''}
     <h3>Who traded it</h3>
@@ -1546,6 +1715,7 @@ async function tickerPanel(sym){
       <td class="${cls(r.alpha)}">${pct(r.alpha)}</td></tr>`).join('')}</tbody></table></div>
     <p style="margin-top:1rem"><button id="onlytk">show only this stock</button></p>`;
   document.body.appendChild(el);
+  drawPrice(d);
   if(d.months.length>1){
     paint('c-tk',{type:'bar',data:{labels:d.months.map(m=>m.ym),
         datasets:[{label:'Buys',data:d.months.map(m=>m.buys),backgroundColor:C.buy,

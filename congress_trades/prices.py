@@ -116,6 +116,22 @@ def series(ticker: str, cfg=CONFIG, force: bool = False) -> dict[str, float]:
     return out
 
 
+def cached(ticker: str, cfg=CONFIG) -> dict[str, float]:
+    """The cached closes for one ticker, or {} -- never a network call.
+
+    `series` refreshes anything older than a trading day, which is right for a
+    pipeline pass and wrong for a page load: the portal draws whatever the last
+    refresh left behind rather than making a reader wait on Yahoo."""
+    path = _cache_path(cfg, ticker)
+    if not path.exists():
+        return {}
+    try:
+        out = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return out if isinstance(out, dict) else {}
+
+
 def _close_at_or_after(s: dict[str, float], day: str, window: int = 7):
     """Closes only exist on trading days, so a disclosure landing on a Saturday or
     a holiday has to walk forward to the next session."""
