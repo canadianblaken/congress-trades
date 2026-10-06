@@ -79,6 +79,20 @@ REPORTS: dict[str, dict] = {
                   "blurb": "Who is trading and who is parking."},
     "alerts":    {"title": "Alerts",    "args": {"days": int}, "defaults": {"days": 14},
                   "blurb": "What crossed a bar recently. Never marks anything seen."},
+    "compliance": {"title": "Compliance", "args": {}, "defaults": {},
+                   "blurb": "Filings past the STOCK Act's 45-day deadline, by member "
+                            "and the most extreme cases."},
+    "annual":    {"title": "Annual reports", "args": {}, "defaults": {},
+                  "blurb": "Debts, outside income and board seats from the annual "
+                           "disclosures fetched so far."},
+    "finance":   {"title": "PAC money", "args": {}, "defaults": {},
+                  "blurb": "Committee jurisdiction x PAC money x trades: who takes "
+                           "money from the industries they oversee, and trades them."},
+    "lobbying":  {"title": "Lobbying", "args": {}, "defaults": {},
+                  "blurb": "LDA lobbying filings against the sectors members trade."},
+    "judiciary": {"title": "Judges", "args": {}, "defaults": {},
+                  "blurb": "Federal judges' disclosed holdings: what the bulk "
+                           "snapshot covers."},
     "jurisdiction": {"title": "Committee jurisdiction", "args": {}, "defaults": {},
                      "blurb": "Which industries each committee oversees. A table "
                               "generated once by a model and committed as data; "
@@ -1074,10 +1088,69 @@ def api_member(name: str) -> dict:
                  FROM congress_trades
                 WHERE member = ? AND ticker != '' GROUP BY ticker
                 ORDER BY n DESC LIMIT 12""", (name,)).fetchall()]
+        prof["annual"] = _member_annual(conn, name)
         conn.close()
+        prof["compliance"] = _member_compliance(name)
+        prof["finance"] = _member_finance(prof.get("bioguide"))
         return prof
     except sqlite3.Error as e:
         return {"error": str(e)}
+
+
+# The other disclosure streams, joined onto one person. Each comes from the module
+# that owns its rules -- compliance decides what counts as late, finance what counts
+# as in-jurisdiction PAC money -- so the panel can never disagree with the report.
+_whole: dict = {}
+
+
+def _cached(name: str, fn):
+    """A whole-dataset result, rebuilt only when the database file has changed."""
+    stamp = CONFIG.db_path.stat().st_mtime if CONFIG.db_path.exists() else 0
+    hit = _whole.get(name)
+    if not hit or hit[0] != stamp:
+        try:
+            hit = _whole[name] = (stamp, fn())
+        except Exception:                      # a report that cannot build is absent, not fatal
+            hit = _whole[name] = (stamp, None)
+    return hit[1]
+
+
+def _member_compliance(name: str) -> dict | None:
+    from . import compliance
+    d = _cached("compliance", lambda: compliance.build(CONFIG))
+    m = ((d or {}).get("members") or {}).get(name)
+    return {k: m.get(k) for k in ("total_trades", "late_count", "late_share",
+                                  "worst_lag", "median_late_lag")} if m else None
+
+
+def _member_finance(bioguide: str | None) -> dict | None:
+    from . import finance
+    if not bioguide:
+        return None
+    d = _cached("finance", lambda: finance.run(None, CONFIG))
+    return next((o for o in (d or {}).get("overlaps") or []
+                 if o.get("bioguide") == bioguide), None)
+
+
+def _member_annual(conn, name: str) -> dict | None:
+    """What the member's annual reports say beyond trades. Only filings already
+    fetched are here, so absence means "not collected", never "nothing to report"."""
+    try:
+        docs = [r[0] for r in conn.execute(
+            "SELECT doc_id FROM annual_filings WHERE member = ?", (name,))]
+        if not docs:
+            return None
+        q = ",".join("?" * len(docs))
+        one = lambda sql: conn.execute(sql.format(q=q), docs).fetchone()
+        debt = one("SELECT COUNT(*), SUM(amount_min) FROM annual_liabilities WHERE doc_id IN ({q})")
+        inc = one("SELECT SUM(amount_val) FROM annual_earned_income WHERE doc_id IN ({q})")
+        orgs = [r[0] for r in conn.execute(
+            f"SELECT DISTINCT organization FROM annual_positions WHERE doc_id IN ({q}) "
+            "AND organization != '' LIMIT 8", docs)]
+        return {"filings": len(docs), "debts": debt[0], "debt_min": debt[1] or 0,
+                "income": inc[0] or 0, "positions": orgs}
+    except sqlite3.Error:
+        return None
 
 
 TOP_METRICS = {
@@ -1841,6 +1914,26 @@ function drawPrice(d){
           callback:v=>hi<100?'$'+v.toFixed(2):'$'+Math.round(v).toLocaleString()}})}}});
 }
 
+// The streams beyond trades, for one person. Each line names its source report.
+function otherDisclosures(d){
+  const c=d.compliance, f=d.finance, a=d.annual, rows=[];
+  if(c&&c.late_count) rows.push(`<b>filed late</b><span>${c.late_count} of ${c.total_trades} `+
+    `past the 45-day deadline (${Math.round(100*c.late_share)}%), worst ${c.worst_lag} days</span>`);
+  else if(c) rows.push(`<b>filed late</b><span>never, across ${c.total_trades}</span>`);
+  if(f) rows.push(`<b>PAC money</b><span>${money(f.pac_dollars)} from PACs in sectors their `+
+    `committees oversee (${esc((f.sectors||[]).join(', '))}), of ${money(f.pac_total)} PAC total; `+
+    `${f.trade_count} trades in those sectors</span>`);
+  if(a){
+    if(a.debts) rows.push(`<b>debts</b><span>${a.debts} liabilities, at least ${money(a.debt_min)}</span>`);
+    if(a.income) rows.push(`<b>outside income</b><span>${money(a.income)}</span>`);
+    if((a.positions||[]).length) rows.push(`<b>positions held</b><span>${a.positions.map(esc).join('; ')}</span>`);
+  }
+  if(!rows.length) return '';
+  return `<h3>Beyond trades</h3><div class="kv">${rows.join('')}</div>
+    <p class="note">From the Compliance, Finance and Annual reports. Annual reports
+    cover only the filings fetched so far${a?` (${a.filings} for this member)`:''}.</p>`;
+}
+
 async function member(name){
   document.querySelectorAll('.panel').forEach(p=>p.remove());
   const d=await (await fetch('/api/member?name='+encodeURIComponent(name))).json();
@@ -1860,6 +1953,7 @@ async function member(name){
       ${d.party_unity!=null?`<b>party unity</b><span>${(d.party_unity).toFixed(0)}%</span>`:''}
       ${d.nominate!=null?`<b>DW-NOMINATE</b><span>${d.nominate.toFixed(2)}</span>`:''}
     </div>
+    ${otherDisclosures(d)}
     ${(d.top||[]).length?`<h3>Most-traded</h3>
       <p class="note">Bar length is how many disclosures; blue is net buying, red net selling.</p>
       <div class="canvas-wrap" id="w-mem" style="height:${Math.min(d.top.length,12)*22+30}px">
