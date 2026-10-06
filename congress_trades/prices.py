@@ -174,7 +174,7 @@ def compute(cfg=CONFIG, limit: int = 0, quiet: bool = False) -> int:
     etfs = {e: v for e, v in etfs.items() if v}
     with db.connect(cfg.db_path) as conn:
         rows = conn.execute(
-            """SELECT t.id, t.ticker, COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0,
+            """SELECT t.id, t.ticker, t.asset_name, COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0,
                       COALESCE(s.sector, '') AS sector
                  FROM congress_trades t
                  LEFT JOIN trade_returns r ON r.trade_id = t.id
@@ -184,6 +184,16 @@ def compute(cfg=CONFIG, limit: int = 0, quiet: bool = False) -> int:
                        OR (r.bench_90 IS NULL AND r.ret_90 IS NOT NULL)
                        OR (r.sec_90 IS NULL AND r.ret_90 IS NOT NULL))
                 ORDER BY d0 DESC""").fetchall()
+        # Options get no stock return: see assets.OPTION for why. Any they were
+        # given before that rule existed is cleared, so every alpha consumer drops them.
+        from . import assets              # here: assets imports this module
+        rows = [r for r in rows if not assets.is_option(r["asset_name"])]
+        gone = [i for i, n in conn.execute(
+            "SELECT t.id, t.asset_name FROM congress_trades t "
+            "JOIN trade_returns r ON r.trade_id = t.id") if assets.is_option(n)]
+        conn.executemany("DELETE FROM trade_returns WHERE trade_id = ?", [(i,) for i in gone])
+        if gone and not quiet:
+            print(f"cleared returns from {len(gone)} option trades")
         if limit:
             rows = rows[:limit]
 

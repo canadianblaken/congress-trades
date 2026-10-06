@@ -88,6 +88,23 @@ CLASSES = (
 )
 
 
+# An option is not a share, and scoring it as one is wrong twice over: a bought
+# put is a bet the price falls but would score as a purchase, and a call's return
+# is leveraged, not the stock's. So options get no stock return at all (see
+# prices.compute). Precise rather than classify()'s broad keyword: "NOTE CALL
+# MAKE" is a callable bond, "Covered Call" an ETF, Option Care Health a company.
+OPTION = re.compile(
+    r"Option Type:"                               # the Senate's own field
+    r"|\[OP\]"                                    # the House's asset-type code
+    r"|^\s*[A-Za-z]{1,5}(\s+M)?\s+(call|put)\b"     # "NVDA PUT", "QQQ M CALL"
+    r"|^\s*(call|put)\s"                           # "CALL SPDR S&P 500", "Call Dec 22 CBT Corn"
+    r"|\boption\s*\[OT\]", re.I)                    # "SPY Option [OT]"
+
+
+def is_option(name: str) -> bool:
+    return bool(OPTION.search(name or ""))
+
+
 UNLABELLED = "Other / unlabelled"
 
 # The closed vocabulary. Every route to a label -- the filing's type code, the
@@ -269,6 +286,14 @@ def selftest(cfg=CONFIG):
     assert classify("New York NY City Transitional Fin") == "Government & municipal debt"
     assert classify("Vanguard Total Stock Market Index Fund") == "Funds & trusts"
     assert classify("SPY Option [OT]") == "Options & derivatives"
+    for n in ("Ark Innovation ETF Option Type: Call Strike price: $51.00", "NVDA PUT",
+              "QQQ M CALL", "NVIDIA Corporation (NVDA) [OP]", "CALL SPDR S&P 500 ETF [OT]",
+              "Call Dec 22 CBT Corn", "SPY Option [OT]", "CCL PUT"):
+        assert is_option(n), n
+    for n in ("BOEING CO NOTE CALL MAKE", "MCDONALDS CORP MTN CALL", "Global X Nasdaq 100 Covered Call",
+              "Option Care Health, Inc. - Common", "California St Go Call 12/01/2027 4%",
+              "V F Corp Note Call Make Whole Rate/Coupon: 2.95%", "Apple Inc. (AAPL) [ST]"):
+        assert not is_option(n), n
     assert classify("") == UNLABELLED
     # Whatever route a name takes, it lands inside the vocabulary the model is
     # given as an enum -- otherwise `mix` would stop partitioning the rows.

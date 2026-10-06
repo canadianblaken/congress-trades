@@ -1155,6 +1155,11 @@ If you fork this, keep the throttles.
 - **Disclosures lag trades by up to 45 days.** The Movers view therefore windows on
   *disclosure* date — what became public in the period — while member timelines use
   the transaction date. A trade-date window would show almost nothing recent.
+- **Options are listed but never scored.** A bought put is a bet the price
+  falls, and a call's return is leveraged, so scoring either as a share trade is
+  wrong. About 750 option trades appear everywhere trades do, with no alpha;
+  `assets.is_option` decides, and callable bonds ("NOTE CALL MAKE") and covered-
+  call ETFs are not options.
 - **Amounts are brackets, not values.** Members report ranges (`$1,001 - $15,000`).
   Rankings use the lower bound. Nobody discloses an exact figure.
 - **SIC is an old taxonomy.** It is authoritative and free, but classifies Apple as
