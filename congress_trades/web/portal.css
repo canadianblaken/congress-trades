@@ -76,6 +76,25 @@ button.ghost:hover:not(:disabled) { color:var(--heading); background:var(--raise
   .menu-list { position:fixed; left:.6rem; right:.6rem; top:auto; min-width:0;
     grid-template-columns:1fr; max-height:70vh; overflow-y:auto; }
   .top-right .note { display:none; }
+  /* Explore's rows become cards: member and direction, then what and how much,
+     then when and how it did. Columns: 1 date 2 member 3 ticker 4 asset 5 type
+     6 amount 7 90d return 8 alpha. */
+  #rows table, #rows tbody { display:block; }
+  #rows thead { display:none; }
+  #rows tr { display:grid; grid-template-columns:auto 1fr auto; gap:.15rem .6rem;
+    align-items:baseline; padding:.65rem .15rem; border-bottom:1px solid var(--line); }
+  #rows td { border:0; padding:0; position:static !important; background:none !important;
+    white-space:normal; text-align:left; }
+  #rows td:nth-child(2) { grid-column:1 / span 2; grid-row:1; font-weight:600; }
+  #rows td:nth-child(5) { grid-column:3; grid-row:1; justify-self:end; }
+  #rows td:nth-child(3) { grid-column:1; grid-row:2; }
+  #rows td:nth-child(4) { grid-column:2; grid-row:2; color:var(--ink-2); font-size:12.5px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
+  #rows td:nth-child(6) { grid-column:3; grid-row:2; justify-self:end; font-size:12.5px; }
+  #rows td:nth-child(1) { grid-column:1 / span 2; grid-row:3; color:var(--ink-3); font-size:12px; }
+  #rows td:nth-child(8) { grid-column:3; grid-row:3; justify-self:end; font-size:12.5px; }
+  #rows td:nth-child(8):not(:empty)::after { content:" alpha"; color:var(--ink-3); font-size:11px; }
+  #rows td:nth-child(7) { display:none; }
 }
 .stats { display:flex; flex-wrap:wrap; gap:1.6rem; margin:0 0 1.4rem; padding:.9rem 1.1rem;
   background:var(--panel); border:1px solid var(--line); border-radius:8px; }
