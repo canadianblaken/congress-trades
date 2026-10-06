@@ -210,7 +210,7 @@ python -m congress_trades alerts --rss > alerts.xml    # the last 100, newest fi
 
 The portal serves the same feed at `/feed.xml` and advertises it in the page
 head, so pointing a feed reader at the portal's address finds it. Over
-Tailscale (see "Reading it from your phone") that gives any phone feed reader
+Tailscale (see "On every computer on your network") that gives any phone feed reader
 the alerts without the notification stack. The feed starts empty and fills as
 alerts are recorded; `--dry-run` runs never add to it.
 
