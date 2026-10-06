@@ -68,9 +68,9 @@ async function overview(){
     +(s.latest?`<div class="stat"><b>${esc(s.latest)}</b><span>latest disclosure</span></div>`:'');
   const cards=Object.entries(REPORTS).map(([k,v])=>
     `<a class="card" href="#/r/${k}"><b>${esc(v.title)}</b><span>${esc(v.blurb)}</span></a>`).join('');
-  app.innerHTML=`<div class="stats">${tiles}</div>
+  app.innerHTML=`<div class="stats">${tiles}</div>${persistenceCallout(s.persistence)}
     <div class="chartbox"><h2>Recent activity</h2>
-      <p class="cap">Disclosures per month over the last two years, by direction.
+      <p class="cap">Disclosures per month over the last two years: buys above the line, sells below.
         <a href="#/trends">Open Trends</a> for top names and a longer window.</p>
       <div class="canvas-wrap" id="w-act"><canvas id="c-act"></canvas></div></div>
     <p><a href="#/explore"><b>Explore every disclosure</b></a> - filter and sort all
@@ -85,29 +85,53 @@ async function overview(){
   drawActivity();
 }
 
+// The finding that governs how every ranking here should be read. Live from the
+// data, so the wording can never outlive the number.
+function persistenceCallout(p){
+  if(!p||p.r==null) return '';
+  const weak=Math.abs(p.r)<0.25;
+  return `<div class="callout"><b>${weak?'Past records have not predicted future ones.':
+    'Records show some persistence, from one sample.'}</b> Splitting each member's
+    scored trades in half, the older half's alpha and the newer half's correlate at
+    <span class="k">r = ${p.r>=0?'+':''}${p.r.toFixed(2)}</span> across ${p.n} members, and
+    ${Math.round(100*p.same_sign)}% keep the same sign${weak?' &mdash; a coin flip':''}.
+    Read the rankings as history, not as tips. <a href="#/r/backtest">The backtest</a>
+    tests it out of sample.</div>`;
+}
+
 async function drawActivity(){
   const d=await (await fetch('/api/timeline?days=730')).json();
   if(!d.rows||!d.rows.length){ const w=$('#w-act');
     if(w) w.innerHTML='<div class="nochart">Nothing to plot yet.</div>'; return; }
   const r=d.rows;
-  $('#w-act').style.height='240px';
-  paint('c-act',{type:'line',data:{labels:r.map(x=>x.ym),
-      datasets:[{label:'Buys',data:r.map(x=>x.buys),borderColor:C.buy,backgroundColor:C.buy,
-          borderWidth:2,pointRadius:0,pointHoverRadius:5,tension:.25},
-        {label:'Sells',data:r.map(x=>x.sells),borderColor:C.sell,backgroundColor:C.sell,
-          borderWidth:2,pointRadius:0,pointHoverRadius:5,tension:.25}]},
+  $('#w-act').style.height='250px';
+  monthBars('c-act',r,r.map(x=>x.buys),r.map(x=>x.sells),v=>v.toLocaleString(),
+    {click:clickMonth(r,d.since)});
+}
+
+// Monthly buying and selling as one diverging column per month: buys above the
+// zero line, sells below. One measure with two poles, so one axis; the position
+// carries direction as well as the colour does. Counts are months, not a
+// continuous signal, so bars rather than a smoothed line.
+const MON=ym=>new Date(ym+'-01T12:00:00').toLocaleString(undefined,{month:'short'})+' '+ym.slice(2,4);
+function monthBars(id,r,buy,sell,fmt,extra){
+  const bar=(label,data,color)=>({label,data,backgroundColor:color,borderWidth:0,
+    borderRadius:4,borderSkipped:'start',categoryPercentage:.86,barPercentage:.92});
+  paint(id,{type:'bar',data:{labels:r.map(x=>x.ym),
+      datasets:[bar('Buys',buy,C.buy),bar('Sells',sell.map(v=>-v),C.sell)]},
     options:{maintainAspectRatio:false,responsive:true,
       interaction:{mode:'index',intersect:false},
-      // The tooltip shows both lines; a click opens whichever is nearer the cursor.
-      ...clickMonth(r,d.since),
+      ...extra.click,
       plugins:{legend:{display:true,position:'top',align:'end',
-          labels:{boxWidth:9,boxHeight:9,usePointStyle:true,pointStyle:'line',padding:14}},
-        tooltip:Object.assign({},tip,{callbacks:{
-          label:c=>`${c.dataset.label}: ${c.parsed.y.toLocaleString()}`,
-          footer:()=>'click a line to list them'}})},
-      scales:{x:axis({grid:{display:false}}),
-        y:axis({beginAtZero:true,ticks:{color:C.faint,padding:6,
-          callback:v=>v.toLocaleString()}})}}});
+          labels:{boxWidth:9,boxHeight:9,usePointStyle:true,pointStyle:'rect',padding:14}},
+        tooltip:Object.assign({},tip,{callbacks:Object.assign({
+          title:i=>MON(i[0].label),
+          label:c=>`${c.dataset.label}: ${fmt(Math.abs(c.parsed.y))}`,
+          footer:()=>'click a bar to list them'},extra.callbacks||{})})},
+      scales:{x:axis({stacked:true,grid:{display:false},ticks:{color:C.faint,maxRotation:0,
+          autoSkipPadding:14,callback:function(v){return MON(this.getLabelForValue(v));}}}),
+        y:axis({stacked:true,ticks:{color:C.faint,padding:6,callback:v=>fmt(Math.abs(v))},
+          grid:{color:c=>c.tick.value===0?C.faint:C.grid,drawTicks:false}})}}});
 }
 
 // A member's name in their party's colour; '' leaves an unknown party as it was.
@@ -134,7 +158,12 @@ let timer=null;
 
 async function explore(){
   if(!facets.members.length) facets=await (await fetch('/api/facets')).json();
-  app.innerHTML=`<div class="filters">
+  // On a phone the results come first: the filters fold into one line that says
+  // how many are set. On a desk they stay open.
+  const nset=['q','member','ticker','chamber','type','floor','since','until'].filter(k=>st[k]).length
+    +(st.tickered==='1')+(st.watched==='1');
+  app.innerHTML=`<details class="fbox"${innerWidth>700?' open':''}><summary>Filters${
+    nset?` <span class="note">(${nset} set)</span>`:''}</summary><div class="filters">
     <div><label>search</label><input id="f-q" placeholder="member, ticker, asset" value="${esc(st.q)}"></div>
     <div><label>member</label><select id="f-member"><option value="">any</option>${
       facets.members.map(m=>`<option value="${esc(m.member)}"${st.member===m.member?' selected':''}>${
@@ -153,7 +182,7 @@ async function explore(){
       <label style="margin:0;text-transform:none;font-size:13px">tickered only</label></div>
     ${READ_ONLY?'':`<div class="chk"><input type="checkbox" id="f-watched"${st.watched==='1'?' checked':''}>
       <label style="margin:0;text-transform:none;font-size:13px">watched only</label></div>`}
-  </div><div id="rows"><div class="spin">loading...</div></div>`;
+  </div></details><div id="rows"><div class="spin">loading...</div></div>`;
 
   const bind=(id,key,ev)=>{const el=$(id); if(!el) return;
     el.addEventListener(ev,()=>{ st[key]=el.type==='checkbox'?(el.checked?'1':'0'):el.value;
@@ -600,24 +629,9 @@ async function drawTime(){
   $('#w-time').style.height='300px';
   // Both series are the same measure in the same unit, so they share one axis --
   // a second y-scale here would invent a relationship that is not in the data.
-  paint('c-time',{type:'bar',data:{labels:r.map(x=>x.ym),
-      datasets:[{label:'Buys',data:buy,backgroundColor:C.buy,borderWidth:0,borderRadius:3,
-          borderSkipped:'start',categoryPercentage:.78,barPercentage:.92},
-        {label:'Sells',data:sell,backgroundColor:C.sell,borderWidth:0,borderRadius:3,
-          borderSkipped:'start',categoryPercentage:.78,barPercentage:.92}]},
-    options:{maintainAspectRatio:false,responsive:true,
-      interaction:{mode:'index',intersect:false},
-      ...clickMonth(r,d.since,{chamber:tstate.chamber,floor:tstate.floor}),
-      plugins:{legend:{display:true,position:'top',align:'end',
-          labels:{boxWidth:9,boxHeight:9,usePointStyle:true,pointStyle:'rect',padding:14}},
-        tooltip:Object.assign({},tip,{callbacks:{
-          label:c=>`${c.dataset.label}: ${dollars?money(c.parsed.y):c.parsed.y.toLocaleString()}`,
-          afterBody:i=>{const x=r[i[0].dataIndex];
-            return [`${x.members} members active`];},
-          footer:()=>'click a bar to list them'}})},
-      scales:{x:axis({grid:{display:false}}),
-        y:axis({ticks:{color:C.faint,padding:6,
-          callback:v=>dollars?money(v):v.toLocaleString()}})}}});
+  monthBars('c-time',r,buy,sell,dollars?money:v=>v.toLocaleString(),
+    {click:clickMonth(r,d.since,{chamber:tstate.chamber,floor:tstate.floor}),
+     callbacks:{afterBody:i=>[`${r[i[0].dataIndex].members} members active`]}});
   box.innerHTML=tableView(['month','buys','sells','buy $','sell $','members'],
     r.map(x=>[x.ym,x.buys,x.sells,money(x.buy_vol),money(x.sell_vol),x.members]));
 }
@@ -777,7 +791,9 @@ async function report(name){
     return `<div><label>${esc(k.replace('-',' '))}</label><input id="o-${k}" inputmode="numeric"
       placeholder="${esc(dflt==null?'':dflt)}" value="${esc(o[k]==null?'':o[k])}"></div>`;
   }).join('');
-  app.innerHTML=(ctl?`<div class="filters">${ctl}</div>`:'')+'<div id="out"><div class="spin">running...</div></div>';
+  app.innerHTML=(ctl?`<div class="filters">${ctl}</div>`:'')+'<div id="pcall"></div>'+'<div id="out"><div class="spin">running...</div></div>';
+  if(['scorecard','backtest'].includes(name)) fetch('/api/stats').then(r=>r.json()).then(s=>{
+    const el=$('#pcall'); if(el) el.innerHTML=persistenceCallout(s.persistence); });
   Object.keys(spec.args).forEach(k=>{ const el=$('#o-'+k); if(!el) return;
     el.addEventListener(el.type==='checkbox'||el.tagName==='SELECT'?'change':'input',()=>{
       o[k]=el.type==='checkbox'?(el.checked?'1':''):el.value;

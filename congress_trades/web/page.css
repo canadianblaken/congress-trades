@@ -108,11 +108,14 @@
     box-shadow:0 4px 14px var(--shadow); opacity:0; transition:opacity .1s; z-index:9; }
   .foot { color:var(--ink-3); font-size:12.5px; margin-top:2rem; border-top:1px solid var(--line);
           padding-top:.9rem; }
-  .views { display:flex; gap:.3rem; margin:0 0 1rem; }
-  .views button { background:var(--panel); border:1px solid var(--line-2); color:var(--ink-2);
-    font:inherit; font-size:14px; padding:.4rem .9rem; border-radius:6px; cursor:pointer; }
-  .views button[aria-current=true] { background:var(--raised); color:var(--heading);
-    border-color:var(--raised-line); }
+  /* The same underline tabs as the portal's navigation. */
+  .views { display:flex; gap:0 .1rem; margin:0 0 1.1rem; border-bottom:1px solid var(--line); }
+  .views button { background:none; border:0; border-bottom:2px solid transparent;
+    margin-bottom:-1px; color:var(--ink-2); font:inherit; font-size:14.5px;
+    padding:.55rem .8rem .5rem; cursor:pointer; }
+  .views button:hover { color:var(--heading); }
+  .views button[aria-current=true] { color:var(--heading); border-bottom-color:var(--link);
+    font-weight:600; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px;
            padding:1.1rem 1.2rem; }
   .panel h3 { color:var(--heading); margin:0 0 .2rem; font-size:1.05rem; }

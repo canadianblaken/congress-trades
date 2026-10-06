@@ -69,6 +69,13 @@ body { font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
 /* status: words carry it; colour only reinforces */
 .ok { color:var(--good); } .bad { color:var(--bad); }
 
+/* callout: the caveat a number has to be read with, said once and plainly */
+.callout { border:1px solid var(--line-2); border-left:4px solid var(--warn);
+  background:color-mix(in srgb, var(--warn) 7%, var(--panel)); border-radius:8px;
+  padding:.75rem 1rem; margin:0 0 1.1rem; font-size:14px; line-height:1.5; }
+.callout b { color:var(--heading); }
+.callout .k { font-variant-numeric:tabular-nums; font-weight:700; color:var(--heading); }
+
 /* theme toggle */
 .theme-toggle { background:none; border:1px solid var(--line-2); color:var(--ink-2);
   border-radius:6px; padding:.3rem .55rem; font:inherit; font-size:12.5px; cursor:pointer; }

@@ -31,6 +31,9 @@ def stats() -> dict:
             "contact": bool(CONFIG.contact),
         }
         conn.close()
+        # The one finding every ranking here has to be read against.
+        out["persistence"] = _cached("persistence", lambda: scorecard.persistence(
+            scorecard.members(CONFIG.default_floor, "90", cfg=CONFIG)))
         return out
     except sqlite3.Error as e:
         return {"error": str(e)}

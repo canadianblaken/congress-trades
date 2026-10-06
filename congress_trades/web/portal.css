@@ -35,6 +35,14 @@ button.ghost:hover:not(:disabled) { color:var(--heading); background:var(--raise
 .nav summary::after { content:"\25BE"; margin-left:.35rem; font-size:.8em; color:var(--ink-3); }
 .nav .here { font-weight:400; color:var(--ink-2); }
 .nav-gap { flex:1; }
+.fbox > summary { cursor:pointer; color:var(--ink-2); font-size:13.5px; margin:0 0 .6rem;
+  list-style:none; } .fbox > summary::-webkit-details-marker { display:none; }
+.fbox > summary::before { content:"\25B8\00A0"; } .fbox[open] > summary::before { content:"\25BE\00A0"; }
+/* Wide tables scroll sideways under their first column, which stays put. */
+.tbl-scroll th:first-child, .tbl-scroll td:first-child { position:sticky; left:0;
+  background:var(--bg); z-index:1; }
+.panel .tbl-scroll th:first-child, .panel .tbl-scroll td:first-child,
+.chartbox .tbl-scroll th:first-child, .chartbox .tbl-scroll td:first-child { background:var(--panel); }
 .menu { position:relative; }
 .menu-list { position:absolute; z-index:30; left:0; top:calc(100% + 4px); min-width:600px;
   display:grid; grid-template-columns:repeat(3,1fr); gap:.2rem 1rem; padding:.8rem;
