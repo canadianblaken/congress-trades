@@ -443,6 +443,28 @@ def store(conn, data: dict) -> dict:
 
 
 # ------------------------------------------------------------------- report
+def member_summary(conn, name: str) -> dict | None:
+    """One member's annual reports beyond trades, for a profile panel. Only filings
+    already fetched are here, so None means "not collected", never "nothing to report"."""
+    try:
+        docs = [r[0] for r in conn.execute(
+            "SELECT doc_id FROM annual_filings WHERE member = ?", (name,))]
+        if not docs:
+            return None
+        q = ",".join("?" * len(docs))
+        debt = conn.execute(f"SELECT COUNT(*), SUM(amount_min) FROM annual_liabilities "
+                            f"WHERE doc_id IN ({q})", docs).fetchone()
+        inc = conn.execute(f"SELECT SUM(amount_val) FROM annual_earned_income "
+                           f"WHERE doc_id IN ({q})", docs).fetchone()
+        orgs = [r[0] for r in conn.execute(
+            f"SELECT DISTINCT organization FROM annual_positions WHERE doc_id IN ({q}) "
+            "AND organization != '' LIMIT 8", docs)]
+        return {"filings": len(docs), "debts": debt[0], "debt_min": debt[1] or 0,
+                "income": inc[0] or 0, "positions": orgs}
+    except Exception:                    # sqlite3.Error, or tables not created yet
+        return None
+
+
 def run(cfg=CONFIG) -> dict:
     """What's actually in the annual-report tables: who carries the most
     disclosed debt (summed lower bounds -- a floor, since every figure here is

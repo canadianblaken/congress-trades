@@ -437,6 +437,22 @@ def reconcile_trades(conn: sqlite3.Connection, kept: list[dict],
     return removed, redated
 
 
+def ticker_names(conn: sqlite3.Connection) -> dict[str, str]:
+    """ticker -> a readable name: SEC's registered name where the sectors pass found
+    one, else the asset description filed most often under that ticker."""
+    out: dict[str, str] = {}
+    for t, name, _n in conn.execute(
+            """SELECT ticker, asset_name, COUNT(*) n FROM congress_trades
+                WHERE ticker != '' AND asset_name != ''
+                GROUP BY ticker, asset_name ORDER BY n"""):
+        out[t] = name                         # ascending, so the commonest wins
+    for t, company in conn.execute(
+            "SELECT ticker, company FROM ticker_sectors WHERE company != ''"):
+        if t in out:
+            out[t] = company
+    return out
+
+
 def all_trades(conn: sqlite3.Connection, since: str = "") -> list[sqlite3.Row]:
     q = "SELECT * FROM congress_trades"
     args: list = []

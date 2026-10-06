@@ -12,11 +12,26 @@ import html
 import json
 from collections import Counter
 
-from . import db, jurisdiction, scorecard
+from . import annual, compliance, db, finance, jurisdiction, scorecard
 from .config import CONFIG
 
 
-def build_payload(conn) -> dict:
+def _extras(cfg) -> tuple[dict, dict]:
+    """(late filings by member, in-jurisdiction PAC overlap by bioguide), from the
+    modules that own those rules so the page cannot disagree with their reports.
+    A stream that cannot build is left out rather than failing the page."""
+    try:
+        late = compliance.build(cfg).get("members") or {}
+    except Exception:
+        late = {}
+    try:
+        pac = {o["bioguide"]: o for o in finance.run(None, cfg).get("overlaps") or []}
+    except Exception:
+        pac = {}
+    return late, pac
+
+
+def build_payload(conn, cfg=CONFIG) -> dict:
     profiles = {r["member"]: dict(r) for r in db.all_members(conn)}
     seats_by_bio = db.committees_by_member(conn)
     cnames: dict[str, int] = {}
@@ -35,6 +50,7 @@ def build_payload(conn) -> dict:
                     r["amount_min"] or 0, r["amount_range"] or "", r["owner"] or "",
                     (r["asset_name"] or "")[:90], ui, r["disclosed"] or ""])
 
+    late, pac = _extras(cfg)
     mlist = []
     for name in order:
         p = profiles.get(name, {})
@@ -65,6 +81,7 @@ def build_payload(conn) -> dict:
             "unity": p.get("party_unity"),
             "nvotes": p.get("votes_cast"),
             "nom": p.get("nominate"),
+            **_beyond(name, p.get("bioguide"), late, pac, conn),
         })
     # ticker -> [sector index, company]; sectors interned since they repeat heavily
     secs = db.all_sectors(conn)
@@ -75,8 +92,26 @@ def build_payload(conn) -> dict:
         si = snames.setdefault(sec, len(snames))
         tmap[t] = [si, (rec.get("company") or "")[:60]]
     return {"members": mlist, "urls": list(urls), "rows": out,
+            "names": db.ticker_names(conn),
             "sectorNames": list(snames), "tickers": tmap,
             "committeeNames": list(cnames)}
+
+
+def _beyond(name, bioguide, late, pac, conn) -> dict:
+    """The "Beyond trades" fields for one member, only those that exist."""
+    out = {}
+    c = late.get(name)
+    if c:
+        out["late"] = [c.get("late_count") or 0, c.get("total_trades") or 0,
+                       c.get("worst_lag"), c.get("late_share") or 0]
+    o = pac.get(bioguide or "")
+    if o:
+        out["pac"] = [o.get("pac_dollars") or 0, o.get("pac_total") or 0,
+                      o.get("sectors") or [], o.get("trade_count") or 0]
+    a = annual.member_summary(conn, name)
+    if a:
+        out["ann"] = a
+    return out
 
 
 def scorecard_payload(cfg) -> list[dict]:
@@ -105,7 +140,7 @@ def scorecard_payload(cfg) -> list[dict]:
 
 def render(cfg=CONFIG) -> int:
     with db.connect(cfg.db_path) as conn:
-        payload = build_payload(conn)
+        payload = build_payload(conn, cfg)
     payload["scorecard"] = scorecard_payload(cfg)
     payload["scoreMin"] = scorecard.MIN_TRADES
     payload["persistence"] = scorecard.persistence(
@@ -155,7 +190,14 @@ TEMPLATE = r"""<!doctype html>
     --bg:#0e1116; --panel:#12161c; --line:#222831; --line-2:#2a3038;
     --ink:#d6dae0; --ink-2:#9aa4b2; --ink-3:#6b7480; --white:#fff;
     --buy:#3987e5; --sell:#e66767; --link:#6cb6ff;
+    --dem:#4f9dff; --rep:#ff5c5c;
   }
+  .pD { color:var(--dem) !important; } .pR { color:var(--rep) !important; }
+  .pI { color:var(--white) !important; }
+  svg .bar { cursor:pointer; }
+  .pick { display:inline-block; margin:.6rem 0 .2rem; padding:.2rem .6rem; font-size:13px;
+          border:1px solid var(--line-2); border-radius:6px; background:var(--panel); }
+  .pick button { all:unset; cursor:pointer; color:var(--link); margin-left:.5rem; }
   * { box-sizing:border-box; }
   /* .wrap sets display:grid, which ties on specificity with the UA [hidden] rule and
      wins on source order -- so hiding a view needs this to actually take effect. */
@@ -345,6 +387,14 @@ const SECTORS = DATA.sectorNames, TICKERS = DATA.tickers;
 const COMMITTEES = DATA.committeeNames;
 const sectorOf = t => { const e = TICKERS[t]; return e ? SECTORS[e[0]] : "Unclassified"; };
 const companyOf = t => { const e = TICKERS[t]; return e ? e[1] : ""; };
+// Full name on hover: SEC's registered name, else the description filed most often.
+const NAMES = DATA.names || {};
+const tkName = t => NAMES[t] || companyOf(t);
+const tk = t => `<b title="${esc(tkName(t))}">${esc(t)}</b>`;
+// A member's name in their party's colour; unknown party leaves it as it was.
+const pc = p => ({D:"pD", R:"pR", I:"pI"})[p] || "";
+const BY_NAME = new Map(M.map(m => [m.n, m]));
+const fmtUSD = n => fmtMoney(Math.round(n || 0));
 
 const $ = s => document.querySelector(s);
 const fmtMoney = n => n >= 1e6 ? "$"+(n/1e6).toFixed(1).replace(/\.0$/,"")+"M"
@@ -393,7 +443,7 @@ function renderRoster() {
   list.sort((a,b) => b.n - a.n || a.m.full.localeCompare(b.m.full));
   $("#roster").innerHTML = list.length ? list.map(x =>
     `<button role="listitem" data-mi="${x.mi}" aria-current="${x.mi===selected}">
-       <span class="who">${esc(x.m.full)}<i>${[x.m.party, x.m.c, x.m.s]
+       <span class="who"><span class="${pc(x.m.party)}">${esc(x.m.full)}</span><i>${[x.m.party, x.m.c, x.m.s]
            .filter(Boolean).map(esc).join(" · ")}</i></span>
        <span class="n">${x.n}</span></button>`).join("")
     : `<p class="empty">No members match.</p>`;
@@ -405,8 +455,11 @@ function renderRoster() {
 const esc = s => String(s).replace(/[&<>"]/g, c =>
   ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
+let pick = null;       // {k: "2025-03", t: "buy"} from a click on the member's chart
+
 function select(mi) {
   selected = mi;
+  pick = null;
   document.querySelectorAll("#roster button").forEach(b =>
     b.setAttribute("aria-current", +b.dataset.mi === mi));
   renderDetail();
@@ -445,7 +498,7 @@ function renderDetail() {
     <div class="profile">
       ${m.thumb ? `<img src="${esc(m.thumb)}" alt="" loading="lazy">` : ""}
       <div class="who">
-        <h2>${esc(m.full)}</h2>
+        <h2 class="${pc(m.party)}">${esc(m.full)}</h2>
         <div class="chips">${chips}</div>
         ${m.desc ? `<p class="meta" style="margin:.4rem 0 0">${esc(m.desc)}</p>` : ""}
         ${m.bio ? `<p class="bio">${esc(m.bio)}</p>` : ""}
@@ -457,16 +510,20 @@ function renderDetail() {
        ${m.n !== m.full ? `<br><span style="color:var(--ink-3)">files as “${esc(m.n)}”</span>` : ""}</p>
     ${lagLine(rows)}
     ${unityLine(m)}
+    ${beyondBlock(m)}
     ${topTicks.length ? `<p class="toptick">Most traded: ${topTicks
-        .map(([t,n]) => `<b>${esc(t)}</b> (${n})`).join(" · ")}</p>` : ""}
+        .map(([t,n]) => `${tk(t)} (${n})`).join(" · ")}</p>` : ""}
     ${committeeBlock(m, rows)}
     ${rows.length ? chartSVG(rows) : ""}
+    ${pick ? `<div class="pick">Showing ${esc(pick.t)}s in ${esc(pick.k)}
+      <button id="unpick">show all</button></div>` : ""}
     <div class="tbl-scroll"><table>
       <thead><tr><th>Date</th><th>Ticker</th><th>Type</th><th>Amount</th>
         <th>Owner</th><th>Asset</th><th>Filing</th></tr></thead>
-      <tbody>${rows.map(r => `<tr>
+      <tbody>${(pick ? rows.filter(r => r[R_DATE].startsWith(pick.k) && r[R_TYPE] === pick.t)
+                     : rows).map(r => `<tr>
         <td class="num">${r[R_DATE]}</td>
-        <td class="num">${r[R_TICK] ? "<b>"+esc(r[R_TICK])+"</b>" : "—"}</td>
+        <td class="num">${r[R_TICK] ? tk(r[R_TICK]) : "—"}</td>
         <td><span class="tag ${r[R_TYPE]}">${r[R_TYPE].toUpperCase()}</span>${
           isLate(r) ? `<span class="tag late" title="filed ${isLate(r)} days after the trade"
             >+${isLate(r)}d</span>` : ""}</td>
@@ -476,7 +533,38 @@ function renderDetail() {
         <td>${URLS[r[R_URL]] ? `<a href="${esc(URLS[r[R_URL]])}" target="_blank"
               rel="noopener">PDF</a>` : "—"}</td></tr>`).join("")}
       </tbody></table></div>`;
-  wireChart();
+  wireChart("#detail", (k, t) => { pick = {k, t}; renderDetail(); });
+  const un = $("#unpick");
+  if (un) un.onclick = () => { pick = null; renderDetail(); };
+}
+
+/* The disclosure streams beyond trades, each from the report that owns its rule. */
+function beyondBlock(m) {
+  const out = [];
+  if (m.late) {
+    const [n, total, worst, share] = m.late;
+    out.push(n ? `Filed <b>${n}</b> of ${total} trades past the STOCK Act's 45-day
+      deadline (${Math.round(share*100)}%), the latest ${worst} days after the trade.`
+      : `Never filed late across ${total} trades.`);
+  }
+  if (m.pac) {
+    const [dollars, total, sectors, trades] = m.pac;
+    out.push(`Took <b>${fmtUSD(dollars)}</b> from PACs in sectors their committees
+      oversee (${esc(sectors.join(", "))}), of ${fmtUSD(total)} in PAC money; made
+      ${trades} trades in those sectors.`);
+  }
+  const a = m.ann;
+  if (a) {
+    if (a.debts) out.push(`Annual report: <b>${a.debts}</b> liabilities, at least ${fmtUSD(a.debt_min)}.`);
+    if (a.income) out.push(`Outside earned income: <b>${fmtUSD(a.income)}</b>.`);
+    if ((a.positions||[]).length) out.push(`Positions held: ${a.positions.map(esc).join("; ")}.`);
+  }
+  if (!out.length) return "";
+  return `<div class="beyond"><p class="meta" style="margin:.8rem 0 .2rem;color:var(--white)">
+      <b>Beyond trades</b></p>${out.map(x => `<p class="meta" style="margin:.15rem 0">${x}</p>`).join("")}
+    <p class="meta" style="color:var(--ink-3);font-size:12px">Late filings, PAC money and
+      annual reports come from their own reports; annual reports cover only the filings
+      fetched so far.</p></div>`;
 }
 
 /* Monthly buy/sell activity. Diverging: buys above the zero line, sells below —
@@ -511,10 +599,10 @@ function chartSVG(rows) {
     let s = "";
     if (d.buy)  { const h = Math.max(3, d.buy*unit);
       s += `<rect class="bar" x="${x}" y="${mid-h}" width="${w}" height="${h}" rx="3"
-             fill="var(--buy)" data-k="${k}" data-b="${d.buy}" data-s="${d.sell}"/>`; }
+             fill="var(--buy)" data-t="buy" data-k="${k}" data-b="${d.buy}" data-s="${d.sell}"/>`; }
     if (d.sell) { const h = Math.max(3, d.sell*unit);
       s += `<rect class="bar" x="${x}" y="${mid+1}" width="${w}" height="${h}" rx="3"
-             fill="var(--sell)" data-k="${k}" data-b="${d.buy}" data-s="${d.sell}"/>`; }
+             fill="var(--sell)" data-t="sell" data-k="${k}" data-b="${d.buy}" data-s="${d.sell}"/>`; }
     const showLbl = months.length <= 14 || i % Math.ceil(months.length/12) === 0;
     if (showLbl) s += `<text x="${x + w/2}" y="${H-4}" text-anchor="middle"
                         transform="rotate(-38 ${x+w/2} ${H-4})">${k.slice(2)}</text>`;
@@ -523,7 +611,7 @@ function chartSVG(rows) {
   return `<div class="legend">
       <span><i style="background:var(--buy)"></i>Buys</span>
       <span><i style="background:var(--sell)"></i>Sells</span>
-      <span style="color:var(--ink-3)">disclosures per month</span></div>
+      <span style="color:var(--ink-3)">trades per month &middot; click a bar to list them</span></div>
     <div class="chart-wrap"><svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}"
         role="img" aria-label="Monthly buy and sell disclosures; full detail in the table below">
       <line class="zero" x1="34" y1="${mid}" x2="${W-4}" y2="${mid}"/>
@@ -533,9 +621,10 @@ function chartSVG(rows) {
       ${bars}</svg></div>`;
 }
 
-function wireChart() {
+function wireChart(scope, onPick) {
   const tip = $("#tip");
-  document.querySelectorAll("#detail .bar").forEach(el => {
+  document.querySelectorAll(scope + " .bar").forEach(el => {
+    el.addEventListener("click", () => { tip.style.opacity = 0; onPick(el.dataset.k, el.dataset.t); });
     el.addEventListener("mousemove", e => {
       tip.innerHTML = `<b>${el.dataset.k}</b><br>${el.dataset.b} buys · ${el.dataset.s} sells`;
       tip.style.opacity = 1;
@@ -785,10 +874,10 @@ function renderScore() {
         </tr></thead>
         <tbody>${rows.map((r, i) => `<tr>
           <td class="num">${i+1}</td>
-          <td><b>${esc(r.n)}</b> <span style="color:var(--ink-3)">${esc(r.c[0] || "")}</span>
+          <td><b class="${pc(BY_NAME.get(r.n)?.party)}">${esc(r.n)}</b> <span style="color:var(--ink-3)">${esc(r.c[0] || "")}</span>
             ${r.cs != null && r.cs >= 0.5 ? `<div style="color:var(--sell); font-size:11.5px;
               margin:.15rem 0 0">one bet: ${Math.round(r.cs*100)}% of scored trades are
-              ${esc(r.ct)}</div>` : ""}
+              <span title="${esc(tkName(r.ct))}">${esc(r.ct)}</span></div>` : ""}
             ${r.best ? `<div class="hint" style="margin:.15rem 0 0">${esc(r.best)}</div>` : ""}
             ${r.worst ? `<div class="hint" style="margin:.1rem 0 0; opacity:.75">${esc(r.worst)}</div>` : ""}
           </td>
@@ -843,7 +932,13 @@ function renderMovers() {
   }).join("");
 
   const top = movers.slice(0, 40);
+  const all = activeRows();
   el.innerHTML = `
+    <div class="panel" style="margin-bottom:1rem" id="mv-act">
+      <h3>Activity</h3>
+      <p class="hint">Every member's trades per month at this filter.</p>
+      ${chartSVG(all)}<div id="mv-pick"></div>
+    </div>
     <div class="panel" style="margin-bottom:1rem">
       <h3>Net buying by sector</h3>
       <p class="hint">Buys minus sells across disclosures in this window.
@@ -861,7 +956,7 @@ function renderMovers() {
         <thead><tr><th>Ticker</th><th>Company</th><th>Sector</th><th>Members</th>
           <th>Buys</th><th>Sells</th><th>Net</th><th>Largest</th><th>Latest</th></tr></thead>
         <tbody>${top.map(m => `<tr>
-          <td class="mv-tick">${esc(m.t)}</td>
+          <td class="mv-tick" title="${esc(tkName(m.t))}">${esc(m.t)}</td>
           <td>${esc(companyOf(m.t) || "—")}</td>
           <td class="mv-mem">${esc(sectorOf(m.t))}</td>
           <td class="num">${m.n}</td>
@@ -873,6 +968,28 @@ function renderMovers() {
           <td class="num">${esc(m.last)}</td></tr>`).join("")}
         </tbody></table></div>
     </div>`;
+  wireChart("#mv-act", (k, t) => monthList(all, k, t));
+}
+
+/* One month's buys or sells from the Movers activity chart, largest first. */
+function monthList(all, k, t) {
+  const rows = all.filter(r => r[R_DATE].startsWith(k) && r[R_TYPE] === t)
+                  .sort((a, b) => b[R_AMT] - a[R_AMT]);
+  const box = $("#mv-pick");
+  box.innerHTML = `<div class="pick">${rows.length.toLocaleString()} ${esc(t)}s in ${esc(k)}${
+      rows.length > 200 ? " (largest 200 shown)" : ""}<button id="mv-unpick">close</button></div>
+    <div class="tbl-scroll"><table>
+      <thead><tr><th>Date</th><th>Member</th><th>Ticker</th><th>Amount</th><th>Asset</th></tr></thead>
+      <tbody>${rows.slice(0, 200).map(r => `<tr>
+        <td class="num">${r[R_DATE]}</td>
+        <td><button class="jump ${pc(M[r[R_M]].party)}" data-jump="${esc(M[r[R_M]].n)}"
+          style="all:unset;cursor:pointer">${esc(M[r[R_M]].full)}</button></td>
+        <td class="num">${r[R_TICK] ? tk(r[R_TICK]) : "—"}</td>
+        <td class="num">${esc(r[R_RANGE] || fmtMoney(r[R_AMT]))}</td>
+        <td>${esc(r[R_ASSET])}</td></tr>`).join("")}</tbody></table></div>`;
+  $("#mv-unpick").onclick = () => { box.innerHTML = ""; };
+  box.querySelectorAll("button.jump").forEach(b =>
+    b.addEventListener("click", () => jumpToMember(b.dataset.jump)));
 }
 
 function outlierPanel() {
@@ -887,10 +1004,10 @@ function outlierPanel() {
       <thead><tr><th>Ticker</th><th>Company</th><th>Sector</th><th>Member</th>
         <th>Type</th><th>Amount</th><th>vs typical</th><th>Date</th></tr></thead>
       <tbody>${lone.map(({t, r, mult}) => `<tr>
-        <td class="mv-tick">${esc(t)}</td>
+        <td class="mv-tick" title="${esc(tkName(t))}">${esc(t)}</td>
         <td>${esc(companyOf(t) || "—")}</td>
         <td class="mv-mem">${esc(sectorOf(t))}</td>
-        <td>${esc(M[r[R_M]].full)}</td>
+        <td class="${pc(M[r[R_M]].party)}">${esc(M[r[R_M]].full)}</td>
         <td><span class="tag ${r[R_TYPE]}">${r[R_TYPE].toUpperCase()}</span></td>
         <td class="num">${esc(r[R_RANGE] || fmtMoney(r[R_AMT]))}</td>
         <td class="num">${mult >= 3 ? `<span class="bigmult">${mult.toFixed(0)}×</span>`

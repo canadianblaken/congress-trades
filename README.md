@@ -21,8 +21,12 @@ one page you can open in a browser:
 
 - **Member view** — click a person for their photo, bio, party, seat, committee
   assignments, filing-lag record, party-unity score, and every trade they disclosed.
-- **Movers view** — net buying by industry, the names the most members converged on,
-  and the *lone large positions* a single member took that nobody else touched.
+  A **Beyond trades** block adds their late-filing record, PAC money from the
+  sectors their committees oversee, and annual-report debts, income and positions.
+  Click a bar in their monthly chart to list just that month's buys or sells.
+- **Movers view** — an activity chart whose bars list that month's trades, net
+  buying by industry, the names the most members converged on, and the *lone large
+  positions* a single member took that nobody else touched.
 - **Scoreboard view** — every member ranked by how their disclosed trades actually
   turned out against the index, buys and sells both, with their best and worst call
   spelled out, each record split into halves, and a warning on any member whose
@@ -548,7 +552,8 @@ tailscale serve status
 tailscale serve --https=8777 off         # stop serving just this one
 ```
 
-Give it its own port as above. A bare `tailscale serve --bg 8777` takes the
+On Linux, `serve` needs root unless you once run
+`sudo tailscale set --operator=$USER`. Give it its own port as above. A bare `tailscale serve --bg 8777` takes the
 root of port 443, replacing anything that machine already serves there, and
 `tailscale serve reset` clears every mapping, not just this one. A sub-path
 (`--set-path`) does not work either: the portal's links and API calls are

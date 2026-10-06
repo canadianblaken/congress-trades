@@ -45,7 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
 
-from . import prices
+from . import annual, db, prices
 from .config import CONFIG
 
 HOST = "127.0.0.1"
@@ -861,23 +861,12 @@ def api_trades(q: dict) -> dict:
 
 
 def api_names() -> dict:
-    """ticker -> a readable name, for hover text. SEC's registered name where the
-    sectors pass found one, else the asset description filed most often."""
+    """ticker -> a readable name, for hover text."""
     if not CONFIG.db_path.exists():
         return {}
     try:
-        conn = _ro()
-        out = {}
-        for r in conn.execute(
-                """SELECT ticker, asset_name, COUNT(*) n FROM congress_trades
-                    WHERE ticker != '' AND asset_name != ''
-                    GROUP BY ticker, asset_name ORDER BY n"""):
-            out[r["ticker"]] = r["asset_name"]     # ascending, so the commonest wins
-        for r in conn.execute("SELECT ticker, company FROM ticker_sectors WHERE company != ''"):
-            if r["ticker"] in out:
-                out[r["ticker"]] = r["company"]
-        conn.close()
-        return out
+        with _ro() as conn:
+            return db.ticker_names(conn)
     except sqlite3.Error:
         return {}
 
@@ -1088,7 +1077,7 @@ def api_member(name: str) -> dict:
                  FROM congress_trades
                 WHERE member = ? AND ticker != '' GROUP BY ticker
                 ORDER BY n DESC LIMIT 12""", (name,)).fetchall()]
-        prof["annual"] = _member_annual(conn, name)
+        prof["annual"] = annual.member_summary(conn, name)
         conn.close()
         prof["compliance"] = _member_compliance(name)
         prof["finance"] = _member_finance(prof.get("bioguide"))
@@ -1130,27 +1119,6 @@ def _member_finance(bioguide: str | None) -> dict | None:
     d = _cached("finance", lambda: finance.run(None, CONFIG))
     return next((o for o in (d or {}).get("overlaps") or []
                  if o.get("bioguide") == bioguide), None)
-
-
-def _member_annual(conn, name: str) -> dict | None:
-    """What the member's annual reports say beyond trades. Only filings already
-    fetched are here, so absence means "not collected", never "nothing to report"."""
-    try:
-        docs = [r[0] for r in conn.execute(
-            "SELECT doc_id FROM annual_filings WHERE member = ?", (name,))]
-        if not docs:
-            return None
-        q = ",".join("?" * len(docs))
-        one = lambda sql: conn.execute(sql.format(q=q), docs).fetchone()
-        debt = one("SELECT COUNT(*), SUM(amount_min) FROM annual_liabilities WHERE doc_id IN ({q})")
-        inc = one("SELECT SUM(amount_val) FROM annual_earned_income WHERE doc_id IN ({q})")
-        orgs = [r[0] for r in conn.execute(
-            f"SELECT DISTINCT organization FROM annual_positions WHERE doc_id IN ({q}) "
-            "AND organization != '' LIMIT 8", docs)]
-        return {"filings": len(docs), "debts": debt[0], "debt_min": debt[1] or 0,
-                "income": inc[0] or 0, "positions": orgs}
-    except sqlite3.Error:
-        return None
 
 
 TOP_METRICS = {
