@@ -703,6 +703,28 @@ def api_trades(q: dict) -> dict:
     return {"rows": out, "total": total, "limit": limit, "offset": offset}
 
 
+def api_names() -> dict:
+    """ticker -> a readable name, for hover text. SEC's registered name where the
+    sectors pass found one, else the asset description filed most often."""
+    if not CONFIG.db_path.exists():
+        return {}
+    try:
+        conn = _ro()
+        out = {}
+        for r in conn.execute(
+                """SELECT ticker, asset_name, COUNT(*) n FROM congress_trades
+                    WHERE ticker != '' AND asset_name != ''
+                    GROUP BY ticker, asset_name ORDER BY n"""):
+            out[r["ticker"]] = r["asset_name"]     # ascending, so the commonest wins
+        for r in conn.execute("SELECT ticker, company FROM ticker_sectors WHERE company != ''"):
+            if r["ticker"] in out:
+                out[r["ticker"]] = r["company"]
+        conn.close()
+        return out
+    except sqlite3.Error:
+        return {}
+
+
 def api_facets() -> dict:
     """The values the filter controls offer. Read once per load, so the explorer
     never invents a member or ticker that is not actually in this database."""
@@ -1119,6 +1141,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/stats":
             self._json(stats()); return
+        if path == "/api/names":
+            self._json(api_names()); return
         if path == "/api/facets":
             self._json(api_facets()); return
         if path == "/api/trades":
@@ -1407,6 +1431,12 @@ async function route(){
 }
 addEventListener('hashchange',route);
 
+// Ticker -> full name, for hover text. Fetched once; a hover before it lands
+// just shows the bare symbol.
+let NAMES={};
+const namesP=fetch('/api/names').then(r=>r.json()).then(d=>{NAMES=d;}).catch(()=>{});
+const tkTitle=i=>{const t=i[0].label; return NAMES[t]?`${t} - ${NAMES[t]}`:t;};
+
 // --- overview --------------------------------------------------------------
 async function overview(){
   app.innerHTML='<div class="spin">loading...</div>';
@@ -1521,7 +1551,7 @@ async function rows(){
   const p=new URLSearchParams(Object.fromEntries(
     Object.entries(st).filter(([k,v])=>v!=='' && v!=='0' || k==='offset' || k==='limit')));
   const box=$('#rows'); if(!box) return;
-  const d=await (await fetch('/api/trades?'+p)).json();
+  const [d]=await Promise.all([fetch('/api/trades?'+p).then(x=>x.json()),namesP]);
   if(d.error){ box.innerHTML=`<div class="err">${esc(d.error)}</div>`; return; }
   if(!d.rows.length){ box.innerHTML='<p class="note">Nothing matches those filters.</p>'; return; }
   const cols=[['date','disclosed'],['member','member'],['ticker','ticker'],['','asset'],
@@ -1532,7 +1562,7 @@ async function rows(){
     <td class="num">${esc(r.disclosed||r.tx_date||'')}</td>
     <td><span class="mlink ${pc(r.party)}" data-m="${esc(r.member)}">${esc(r.full_name||r.member)}</span>${
       r.party?` <span class="note">${esc(r.party[0])}</span>`:''}</td>
-    <td>${r.ticker?`<b class="mlink" data-t="${esc(r.ticker)}">${esc(r.ticker)}</b>`
+    <td>${r.ticker?`<b class="mlink" data-t="${esc(r.ticker)}" title="${esc(NAMES[r.ticker]||'')}">${esc(r.ticker)}</b>`
       :'<span class="note">-</span>'}</td>
     <td>${esc((r.asset_name||'').slice(0,54))}</td>
     <td class="${/^s/i.test(r.tx_type||'')?'neg':'pos'}">${esc(r.tx_type||'')}</td>
@@ -1670,6 +1700,7 @@ async function member(name){
         onClick:(ev,els)=>{ if(els&&els.length) tickerPanel(d.top[els[0].index].ticker); },
         onHover:(ev,els)=>{ ev.native.target.style.cursor=els.length?'pointer':'default'; },
         plugins:{legend:{display:false},tooltip:Object.assign({},tip,{callbacks:{
+          title:tkTitle,
           label:c=>{const t=d.top[c.dataIndex];
             return [`${c.parsed.x} disclosure${c.parsed.x===1?'':'s'}`,
               `${t.net>0?'net buying':t.net<0?'net selling':'balanced'}: ${money(t.net||0)}`];}}})},
@@ -1880,6 +1911,7 @@ async function drawTop(){
       onClick:(ev,els)=>{ if(els&&els.length) tickerPanel(rows[els[0].index].ticker); },
       onHover:(ev,els)=>{ ev.native.target.style.cursor=els.length?'pointer':'default'; },
       plugins:{legend:{display:false},tooltip:Object.assign({},tip,{callbacks:{
+        title:tkTitle,
         label:c=>{const r=rows[c.dataIndex];
           // The bar no longer states its own direction once the metric is a
           // magnitude, so the net figure that drives the colour is spelled out.
