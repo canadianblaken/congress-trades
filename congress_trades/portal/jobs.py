@@ -40,6 +40,10 @@ REPORTS: dict[str, dict] = {
                   "blurb": "Who is trading and who is parking."},
     "alerts":    {"title": "Alerts",    "args": {"days": int}, "defaults": {"days": 14},
                   "blurb": "What crossed a bar recently. Never marks anything seen."},
+    "flags":     {"title": "Flags", "args": {}, "defaults": {},
+                  "blurb": "Per member, side by side: late filings, trades in sectors "
+                           "their committees oversee, PAC money from those sectors, and "
+                           "large bets no other member made. Facts, not a score."},
     "compliance": {"title": "Compliance", "args": {}, "defaults": {},
                    "blurb": "Filings past the STOCK Act's 45-day deadline, by member "
                             "and the most extreme cases."},

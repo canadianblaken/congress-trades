@@ -12,7 +12,7 @@ import json
 import logging
 import sys
 
-from . import (advise, alerts, annual, assets, backtest, collect, committees,
+from . import (advise, alerts, annual, flags, assets, backtest, collect, committees,
                compliance, db, digest, finance, judiciary, jurisdiction, lag,
                llm, lobbying, parserqa, pipeline, prices, resolve, scorecard,
                topics)
@@ -205,6 +205,11 @@ def main(argv=None) -> int:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--quiet", action="store_true")
 
+    p = sub.add_parser("flags", help="per member: late filings, committee-sector "
+                       "trades, PAC money from those sectors, lone large bets")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
     p = sub.add_parser("watch", help="members and tickers you follow: alerts and the "
                        "digest report every trade they touch")
     p.add_argument("action", nargs="?", choices=("list", "add", "rm"), default="list")
@@ -386,6 +391,16 @@ def main(argv=None) -> int:
             print(json.dumps(d, indent=2, default=str))
         else:
             sys.stdout.write(committees.to_markdown(d))
+        return 0
+    if args.cmd == "flags":
+        if args.selftest:
+            flags.selftest(CONFIG)
+            return 0
+        d = flags.build(CONFIG)
+        if args.json:
+            print(json.dumps(d, indent=2, default=str))
+        else:
+            sys.stdout.write(flags.to_markdown(d))
         return 0
     if args.cmd == "watch":
         return watch_cmd(args)

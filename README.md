@@ -184,6 +184,21 @@ Filings land on weekdays; member biographies barely change. A reasonable split:
 `--rotate N` re-checks the N least-recently-updated members, so a daily run cycles
 the whole roster over about a week while staying well inside Wikipedia's rate limit.
 
+## Flags
+
+```bash
+python -m congress_trades flags           # also the Flags tab in the portal
+```
+
+One row per member with four facts side by side, each from the report that owns
+its rule: trades filed past the 45-day deadline, trades in sectors their own
+committees oversee, PAC money from those sectors, and large trades ($100k+) no
+other member made in that ticker within 30 days. There is deliberately no
+combined score — the four are not on a common scale, and a ranked "most
+suspicious" list would claim more than disclosure data can. Rows are ordered by
+how many flags apply, and one instance is enough to raise a flag, so read the
+numbers rather than the count.
+
 ## Alerts feed
 
 Every alert the nightly run records is also kept with its text, reasons and a

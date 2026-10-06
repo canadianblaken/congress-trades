@@ -52,7 +52,7 @@ def post(path, body=b"{}", headers=None):
         return e.code, json.loads(e.read())
 
 
-PAGES = ["/", "/jobs", "/page", "/feed.xml", "/r/compliance", "/r/scorecard?limit=5",
+PAGES = ["/", "/jobs", "/page", "/feed.xml", "/r/compliance", "/r/flags", "/r/scorecard?limit=5",
          "/static/portal.js", "/static/portal.css", "/static/common.js"]
 APIS = ["/status", "/api/stats", "/api/jobs", "/api/model", "/api/facets", "/api/names",
         "/api/watch", "/api/trades?limit=3&watched=1",

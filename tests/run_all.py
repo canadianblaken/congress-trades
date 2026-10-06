@@ -26,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 SELFTESTS = ("advise", "alerts", "annual", "assets", "backtest", "committees",
-             "compliance", "digest", "finance", "judiciary", "jurisdiction", "lag",
+             "compliance", "digest", "finance", "flags", "judiciary", "jurisdiction", "lag",
              "llm", "lobbying", "mcp_server", "parserqa", "resolve", "scorecard",
              "topics")
 _CALL = ("import inspect, congress_trades.{m} as mod\n"
