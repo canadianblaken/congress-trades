@@ -609,8 +609,7 @@ watchlist changes) and hides your setup: no Maintenance tab, no model settings,
 no live model check, and no watchlist -- not in the API, and not in the reports
 or the alerts feed either, since a watchlist of what you hold is personal. Each
 port keeps its own pid file, so the two portals start and stop independently.
-It still binds to `127.0.0.1`; to share it, put that port behind Tailscale as
-below, or behind a reverse proxy you control.
+It binds to `127.0.0.1` unless you add `--host 0.0.0.0` -- see the next section.
 
 ### On every computer on your network
 
