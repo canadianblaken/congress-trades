@@ -52,6 +52,23 @@ assert s[1]["asset_name"] == "W.L. Gore & Associates, Inc.", s[1]  # entities un
 assert s[0]["amount_min"] == 50001, s[0]
 assert parse_senate_report("<table><tr><td>no</td></tr></table>") == []
 
+# --- a ticker never comes from the labelled fields under an asset --------------
+# Real layouts: an annuity whose Subholding Of names "(RILA)", and a wrapped name
+# whose ticker sits on its second line above a "401(k)" subholding.
+f = parse_house_ptr("""
+                      Prudential RILA - 10% Buffer 3-year    P                  02/17/2026 02/28/2026    $1,000,001 -
+                      S&P 500 Index [VA]                                                                 $5,000,000
+                      F      S      : New
+                      S            O : Registered Index Linked Annuity (RILA)
+                      D           : Buffered Indexed Annuity Exchange
+
+                      International Business Machines        S                  03/02/2026 03/09/2026    $1,001 - $15,000
+                      Corporation Common Stock (IBM)
+                      F      S      : New
+                      S           O : David Taylor Trust > Sardinia Ready Mix 401(k) - Dave
+""")
+assert [r["ticker"] for r in f] == ["", "IBM"], f
+
 # --- normalize: the $15k floor and ISO dates ----------------------------------------
 n = normalize(h + s, 15001)
 assert all(r["amount_min"] >= 15001 for r in n), n

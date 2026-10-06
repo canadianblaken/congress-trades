@@ -105,6 +105,14 @@ def ticker_from_name(name: str, known: set[str] | None = None) -> str:
         return ""
     return cand
 _H_OWNER = re.compile(r"^\s*(SP|JT|DC)\b")
+# The labelled fields under an asset -- Filing Status, Subholding Of, Description,
+# Comments -- which pdftotext renders as "F S :", "S O :", "D :". Their text is
+# about the holding, not its name: "Registered Index Linked Annuity (RILA)" or
+# "403(b)" there was being read as a ticker, and past them sits the NEXT
+# transaction's asset line, whose ticker was landing on this one.
+_H_FIELD = re.compile(
+    r"^\s*(?:[A-Z](?:\s+[A-Z])?|Filing Status|Subholding Of|Description|Comments?)\s*:",
+    re.M)
 _MONEY = re.compile(r"\$([\d,]+)")
 
 
@@ -187,8 +195,12 @@ def parse_house_ptr(text: str) -> list[dict]:
             # Read from the head line, not the whole block: the tail holds amount
             # brackets and dates that can carry their own parentheses. The
             # fallback is this transaction's own tail rather than the block,
-            # because the block may hold another transaction's symbol.
-            tick = ticker_from_name(name) or ticker_from_name(tail)
+            # because the block may hold another transaction's symbol -- and only
+            # the tail up to the first labelled field, where a wrapped asset name
+            # ("... Corporation Common Stock (IBM)") ends.
+            field = _H_FIELD.search(tail)
+            tick = ticker_from_name(name) or ticker_from_name(
+                tail[:field.start()] if field else tail)
             rows.append({
                 "owner": {"SP": "Spouse", "JT": "Joint", "DC": "Dependent"}.get(
                     owner.group(1) if owner else "", "Self"),
