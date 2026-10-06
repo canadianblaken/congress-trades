@@ -84,6 +84,13 @@ def api_trades(q: dict) -> dict:
         params.append(until)
     if (q.get("tickered") or [""])[0] == "1":
         where.append("t.ticker != ''")
+    if (q.get("watched") or [""])[0] == "1":
+        with _ro() as c:
+            w = db.watchlist(c)
+        wm, wt = sorted(w["member"]), sorted(w["ticker"])
+        where.append(f"(t.member IN ({','.join('?' * len(wm))}) "
+                     f"OR t.ticker IN ({','.join('?' * len(wt))}))" if wm or wt else "0")
+        params += [*wm, *wt]
 
     sort = SORTS.get((q.get("sort") or ["date"])[0], SORTS["date"])
     desc = "ASC" if (q.get("dir") or ["desc"])[0] == "asc" else "DESC"
@@ -111,6 +118,45 @@ def api_trades(q: dict) -> dict:
     for r in out:
         r["alpha"] = scorecard.alpha(r["tx_type"], r["ret_90"], r["bench_90"])
     return {"rows": out, "total": total, "limit": limit, "offset": offset}
+
+
+def api_watch() -> dict:
+    """The watchlist, with a display name and 90-day trade count per entry."""
+    if not CONFIG.db_path.exists():
+        return {"member": [], "ticker": []}
+    since = (dt.date.today() - dt.timedelta(days=90)).isoformat()
+    with _ro() as conn:
+        w, names = db.watchlist(conn), db.ticker_names(conn)
+        full = {m: f for m, f in conn.execute("SELECT member, full_name FROM congress_members")}
+        n = lambda col, v: conn.execute(
+            f"SELECT COUNT(*) FROM congress_trades WHERE {col} = ? "
+            "AND COALESCE(NULLIF(disclosed,''), tx_date) >= ?", (v, since)).fetchone()[0]
+        return {"member": [{"value": m, "name": full.get(m) or m, "n90": n("member", m)}
+                           for m in sorted(w["member"])],
+                "ticker": [{"value": t, "name": names.get(t, ""), "n90": n("ticker", t)}
+                           for t in sorted(w["ticker"])]}
+
+
+def watch_set(body: dict) -> dict:
+    """Add or remove one member, or one or more tickers. A member is matched like
+    the CLI does: any part of the name, refused unless exactly one fits."""
+    kind, text, on = body.get("kind"), str(body.get("value", "")).strip(), body.get("on", True)
+    if kind not in ("member", "ticker") or not text or len(text) > 400:
+        raise ValueError("pick member or ticker, and a value")
+    with db.connect(CONFIG.db_path) as conn:
+        if kind == "member":
+            hits = db.resolve_member(conn, text)
+            if len(hits) != 1:
+                raise ValueError(f"no member matches {text!r}" if not hits else
+                                 f"{text!r} matches {len(hits)}: " + "; ".join(hits[:8]))
+            db.watch(conn, "member", hits[0], bool(on))
+        else:
+            syms = text.replace(",", " ").upper().split()
+            if not all(re.fullmatch(r"[A-Z][A-Z0-9.\-]{0,9}", s) for s in syms):
+                raise ValueError("tickers are letters, e.g. AAPL MSFT BRK.B")
+            for s in syms:
+                db.watch(conn, "ticker", s, bool(on))
+    return api_watch()
 
 
 def api_names() -> dict:

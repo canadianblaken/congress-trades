@@ -14,7 +14,7 @@ from urllib.parse import quote
 from urllib.parse import urlparse
 
 from ..config import CONFIG
-from .api import api_facets, api_member, api_names, api_ticker, api_timeline, api_top, api_trades, stats
+from .api import api_facets, api_member, api_names, api_ticker, api_timeline, api_top, api_trades, api_watch, stats, watch_set
 from .jobs import JOBS, PIDFILE, REPORTS, _prereq, _refresh, _report_args, _run, start_job, start_refresh
 from .models import PRESETS, model_current, model_list, model_save
 from .pages import APP, STATIC, WEB, jobs_page, md_to_html, overview, report_page, shell
@@ -71,6 +71,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         path, q = u.path, parse_qs(u.query)
+        if path == "/api/watch":
+            if not self._same_origin():
+                self._json({"error": "refused: not from this portal's page"}, 403)
+                return
+            try:
+                self._json(watch_set(self._body()))
+            except ValueError as e:
+                self._json({"error": str(e)}, 400)
+            return
         if path in ("/api/model", "/api/models"):
             if not self._same_origin():
                 self._json({"error": "refused: not from this portal's page"}, 403)
@@ -140,6 +149,9 @@ class Handler(BaseHTTPRequestHandler):
                         "verb": JOBS.get(job, {}).get("verb", "Running"),
                         "elapsed": int(time.time() - _refresh["started"])
                         if _refresh["started"] else 0})
+            return
+        if path == "/api/watch":
+            self._json(api_watch())
             return
         if path == "/api/model":
             self._json({"presets": PRESETS, "current": model_current()})

@@ -36,6 +36,34 @@ def _require_contact() -> bool:
     return False
 
 
+def watch_cmd(args) -> int:
+    """`watch` lists; `watch add|rm member <name>`; `watch add|rm ticker AAPL MSFT`."""
+    with db.connect(CONFIG.db_path) as conn:
+        if args.action != "list":
+            if not args.kind or not args.values:
+                print("usage: watch add|rm member <name>  |  watch add|rm ticker <SYM> ...")
+                return 2
+            if args.kind == "member":
+                name = " ".join(args.values)
+                hits = db.resolve_member(conn, name)
+                if len(hits) != 1:
+                    print(f"no member matches {name!r}" if not hits else
+                          f"{name!r} matches {len(hits)}: " + "; ".join(hits[:12]))
+                    return 1
+                db.watch(conn, "member", hits[0], args.action == "add")
+                print(f"{'watching' if args.action == 'add' else 'stopped watching'} {hits[0]}")
+            else:
+                syms = " ".join(args.values).replace(",", " ").upper().split()
+                for sym in syms:
+                    db.watch(conn, "ticker", sym, args.action == "add")
+                print(f"{'watching' if args.action == 'add' else 'stopped watching'} "
+                      + ", ".join(syms))
+        w = db.watchlist(conn)
+    print(f"members: {', '.join(sorted(w['member'])) or '(none)'}")
+    print(f"tickers: {', '.join(sorted(w['ticker'])) or '(none)'}")
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
         prog="congress-trades",
@@ -174,6 +202,12 @@ def main(argv=None) -> int:
                        "dropped from the asset name")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--quiet", action="store_true")
+
+    p = sub.add_parser("watch", help="members and tickers you follow: alerts and the "
+                       "digest report every trade they touch")
+    p.add_argument("action", nargs="?", choices=("list", "add", "rm"), default="list")
+    p.add_argument("kind", nargs="?", choices=("member", "ticker"))
+    p.add_argument("values", nargs="*", help="a member's name (any part of it) or tickers")
 
     p = sub.add_parser("compliance", help="filings that crossed the STOCK Act's "
                        "45-day deadline")
@@ -351,6 +385,8 @@ def main(argv=None) -> int:
         else:
             sys.stdout.write(committees.to_markdown(d))
         return 0
+    if args.cmd == "watch":
+        return watch_cmd(args)
     if args.cmd == "alerts":
         if args.selftest:
             alerts.selftest(CONFIG)

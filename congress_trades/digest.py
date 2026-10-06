@@ -37,7 +37,18 @@ def load(days: int, floor: int, cfg=CONFIG):
                 WHERE t.ticker != '' AND t.amount_min >= ?
                   AND COALESCE(NULLIF(t.disclosed,''), t.tx_date) >= ?""",
             (floor, since))]
-    return rows, members, seats, sectors, since, medians
+        watched = db.watchlist(conn)
+        wm, wt = sorted(watched["member"]), sorted(watched["ticker"])
+        # Every size, tickered or not: you asked to see these, so no floor applies.
+        watch_rows = [dict(r) for r in conn.execute(
+            f"""SELECT t.member, t.ticker, t.asset_name, t.tx_type, t.amount_range,
+                       t.amount_min, COALESCE(NULLIF(t.disclosed,''), t.tx_date) d0
+                  FROM congress_trades t
+                 WHERE (t.member IN ({",".join("?" * len(wm))})
+                        OR t.ticker IN ({",".join("?" * len(wt))}))
+                   AND COALESCE(NULLIF(t.disclosed,''), t.tx_date) >= ?
+                 ORDER BY d0 DESC""", (*wm, *wt, since))] if wm or wt else []
+    return rows, members, seats, sectors, since, medians, (watched, watch_rows)
 
 
 def scored_alpha(r: dict, horizon: str = "90") -> float | None:
@@ -139,7 +150,7 @@ def pct(x):
 
 
 def build(days=90, floor=15001, cfg=CONFIG) -> dict:
-    rows, members, seats, sectors, since, medians = load(days, floor, cfg)
+    rows, members, seats, sectors, since, medians, (watched, watch_rows) = load(days, floor, cfg)
     return {
         "since": since, "days": days, "floor": floor,
         "disclosures": len(rows),
@@ -152,6 +163,8 @@ def build(days=90, floor=15001, cfg=CONFIG) -> dict:
         "scorecard": (sc := scorecard.members(floor, "90", cfg=cfg))[:15],
         "persistence": scorecard.persistence(sc),
         "_sectors_by_ticker": {t: (v.get("sector") or "?") for t, v in sectors.items()},
+        "watchlist": {k: sorted(v) for k, v in watched.items()},
+        "watched": watch_rows,
     }
 
 
@@ -174,6 +187,21 @@ def to_markdown(d: dict) -> str:
          "- Alpha still is not skill: windows overlap, the set is dominated by a few",
          "  prolific filers, and a median across trades is not a portfolio return.",
          "- Many disclosures are spouse-directed or index funds the filer never chose.", ""]
+
+    w = d.get("watchlist") or {}
+    if w.get("member") or w.get("ticker"):
+        L += ["## Your watchlist",
+              f"Watching: {', '.join(w.get('member', []) + w.get('ticker', []))}. "
+              f"{len(d['watched'])} disclosure(s) in this window, at any size.", ""]
+        if d["watched"]:
+            L += ["| disclosed | member | type | ticker | asset | amount |",
+                  "|---|---|---|---|---|--:|"]
+            L += [f"| {r['d0']} | {r['member']} | {r['tx_type']} | {r['ticker'] or '-'} | "
+                  f"{(r['asset_name'] or '')[:40]} | {r['amount_range'] or ''} |"
+                  for r in d["watched"][:40]]
+            if len(d["watched"]) > 40:
+                L.append(f"| …and {len(d['watched']) - 40} more | | | | | |")
+        L.append("")
 
     L += ["## Convergence — most distinct members on one name",
           "| ticker | members | net | largest | sector | median 30d | median 90d |",
@@ -243,7 +271,7 @@ def to_markdown(d: dict) -> str:
 
 
 def selftest(cfg=CONFIG):
-    rows, members, seats, sectors, _, medians = load(3650, 1, cfg)
+    rows, members, seats, sectors, _, medians, _w = load(3650, 1, cfg)
     assert rows, "no rows loaded from congress.db"
     conv = convergence(rows)
     assert [o["n"] for o in conv] == sorted((o["n"] for o in conv), reverse=True), \

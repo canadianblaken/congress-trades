@@ -23,6 +23,8 @@ So the bars are the things the data does support, or that are simply facts:
              Re-fires only when the count rises.
   committee  a trade at $100k+ in a sector the member's own committee oversees.
              Reported as a fact about jurisdiction, not as evidence of anything.
+  watched    any new trade by a member, or in a ticker, on your watchlist, at
+             any size -- you asked to hear about it, so no bar applies.
 
 Every alert fires once. Fingerprints live in the database so a re-run on the same
 day is silent, which is what makes this safe to put on a timer.
@@ -101,15 +103,18 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
     out: list[dict] = []
     with db.connect(cfg.db_path) as conn:
         seen = _fingerprints(conn)
+        watched = db.watchlist(conn)
+        wm = sorted(watched["member"])
         rows = [dict(r) for r in conn.execute(
             f"""SELECT t.id, t.member, t.chamber, t.ticker, t.tx_type, t.tx_date,
                       t.disclosed, t.amount_min, t.amount_range, t.owner, t.occ,
+                      t.asset_name,
                       COALESCE(s.sector,'') AS sector,
                       COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0
                  FROM (SELECT t.*, {_OCC} AS occ FROM congress_trades t) t
                  LEFT JOIN ticker_sectors s ON s.ticker = t.ticker
-                WHERE t.ticker != ''
-                  AND COALESCE(NULLIF(t.disclosed,''), t.tx_date) >= ?""", (since,))]
+                WHERE (t.ticker != '' OR t.member IN ({",".join("?" * len(wm))}))
+                  AND COALESCE(NULLIF(t.disclosed,''), t.tx_date) >= ?""", (*wm, since))]
 
         # Each member's own typical size, over their whole history, above the
         # same floor digest.lone_large uses -- so a trade's "Nx their median"
@@ -122,6 +127,10 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
 
         for r in rows:
             reasons = []
+            if r["member"] in watched["member"]:
+                reasons.append("watched member")
+            if r["ticker"] and r["ticker"] in watched["ticker"]:
+                reasons.append("watched ticker")
             lag = None
             if r["tx_date"] and r["disclosed"]:
                 try:
@@ -159,7 +168,8 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
                         "amount": r["amount_min"], "range": r["amount_range"],
                         "disclosed": r["disclosed"], "sector": r["sector"],
                         "why": reasons,
-                        "line": f"{r['member']} {r['tx_type']} {r['ticker']} "
+                        "line": f"{r['member']} {r['tx_type']} "
+                                f"{r['ticker'] or (r['asset_name'] or '?')[:40]} "
                                 f"{money(r['amount_min'])} ({', '.join(reasons)})"})
 
         # Convergence is a property of a ticker, not of one filing.
@@ -221,7 +231,8 @@ def to_text(alerts: list[dict], days: int = 14) -> str:
           f"Bars: {money(HUGE)}+, {UNUSUAL_MULT}x the member's own median (and at "
           f"least {money(UNUSUAL_FLOOR)}), a {money(BIG)}+ trade in their own "
           f"committee's sector, or {CONVERGE_MEMBERS}+ members on one name in "
-          f"{CONVERGE_WINDOW} days. Being filed promptly or merely being {money(BIG)}+ "
+          f"{CONVERGE_WINDOW} days -- or any trade on your watchlist. "
+          f"Being filed promptly or merely being {money(BIG)}+ "
           "annotates an alert but never raises one.",
           "",
           "Deliberately not a bar: the filer's track record. Member alpha does not "

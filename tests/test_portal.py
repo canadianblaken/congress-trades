@@ -55,6 +55,7 @@ def post(path, body=b"{}", headers=None):
 PAGES = ["/", "/jobs", "/page", "/r/compliance", "/r/scorecard?limit=5",
          "/static/portal.js", "/static/portal.css", "/static/common.js"]
 APIS = ["/status", "/api/stats", "/api/jobs", "/api/model", "/api/facets", "/api/names",
+        "/api/watch", "/api/trades?limit=3&watched=1",
         "/api/trades?limit=3&sort=alpha", "/api/timeline?days=365", "/api/top",
         "/api/ticker?symbol=NVDA", "/api/member?name=Nancy%20Pelosi"]
 
@@ -79,6 +80,7 @@ for p in ("/static/page.js", "/static/../config.py", "/static/"):
 # The model form refuses anything but this portal's own page.
 assert post("/api/models", headers={"Origin": "https://evil.example"})[0] == 403
 assert post("/api/model", headers={"Content-Type": "text/plain"})[0] == 403
+assert post("/api/watch", headers={"Origin": "https://evil.example"})[0] == 403
 # An unknown job is refused, not started.
 code, d = post("/job/nonesuch")
 assert code == 409 and not d["started"], (code, d)

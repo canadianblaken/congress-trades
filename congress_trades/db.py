@@ -343,6 +343,17 @@ CREATE TABLE IF NOT EXISTS meeting_topics (
     model      TEXT NOT NULL,
     updated_at TEXT
 );
+
+-- Members and tickers you follow. Personal: it lives here rather than in git,
+-- and the shareable static page never includes it. A member is stored by the
+-- name as filed (congress_trades.member); a ticker need not have been traded
+-- yet -- watching what you own is the point.
+CREATE TABLE IF NOT EXISTS watchlist (
+    kind   TEXT NOT NULL CHECK (kind IN ('member', 'ticker')),
+    value  TEXT NOT NULL,
+    added  TEXT NOT NULL,
+    PRIMARY KEY (kind, value)
+);
 """
 
 
@@ -376,6 +387,40 @@ def connect(db_path: Path):
         conn.commit()
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------- watchlist
+def watchlist(conn: sqlite3.Connection) -> dict[str, set[str]]:
+    out: dict[str, set[str]] = {"member": set(), "ticker": set()}
+    try:
+        for kind, value in conn.execute("SELECT kind, value FROM watchlist"):
+            out[kind].add(value)
+    except sqlite3.OperationalError:            # a read-only connection to an older file
+        pass
+    return out
+
+
+def resolve_member(conn: sqlite3.Connection, text: str) -> list[str]:
+    """Filed names matching `text`: exact first, else case-insensitive substring
+    of the filed or full name. One result means it is unambiguous."""
+    rows = conn.execute(
+        """SELECT DISTINCT t.member, COALESCE(m.full_name, '') FROM congress_trades t
+             LEFT JOIN congress_members m ON m.member = t.member""").fetchall()
+    exact = [m for m, f in rows if text in (m, f)]
+    if exact:
+        return exact[:1]
+    q = text.lower()
+    return sorted({m for m, f in rows if q in m.lower() or q in f.lower()})
+
+
+def watch(conn: sqlite3.Connection, kind: str, value: str, on: bool = True) -> None:
+    if kind not in ("member", "ticker"):
+        raise ValueError("kind must be member or ticker")
+    if on:
+        conn.execute("INSERT OR IGNORE INTO watchlist (kind, value, added) VALUES (?,?,?)",
+                     (kind, value, utcnow()))
+    else:
+        conn.execute("DELETE FROM watchlist WHERE kind = ? AND value = ?", (kind, value))
 
 
 # ---------------------------------------------------------------- trades

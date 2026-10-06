@@ -7,7 +7,7 @@ let facets={members:[],tickers:[]};
 // --- routing ---------------------------------------------------------------
 // [hash, label, what the tab is for]. Descriptions come from the server: TABS for
 // the fixed tabs, each report's own blurb for the rest.
-const routes=()=>[...['','trends','explore','page'].map(h=>[h,TABS[h].title,TABS[h].blurb]),
+const routes=()=>[...['','trends','explore','watch','page'].map(h=>[h,TABS[h].title,TABS[h].blurb]),
   ...Object.entries(REPORTS).map(([k,v])=>['r/'+k,v.title,v.blurb]),
   ['jobs',TABS.jobs.title,TABS.jobs.blurb]];
 function nav(){
@@ -23,6 +23,7 @@ async function route(){
   const cur=location.hash.replace(/^#\//,'');
   if(cur==='trends') return trends();
   if(cur==='explore') return explore();
+  if(cur==='watch') return watchPage();
   if(cur==='page') return full();
   if(cur==='jobs') return jobs();
   if(cur.startsWith('r/')) return report(cur.slice(2));
@@ -96,7 +97,7 @@ async function drawActivity(){
 // Both timelines open the explorer on one month and direction. `since` is the
 // window's own cut, because the first month plotted is usually partial.
 function openMonth(ym,sell,since,extra){
-  Object.assign(st,{q:'',member:'',ticker:'',chamber:'',floor:'',tickered:'0',
+  Object.assign(st,{q:'',member:'',ticker:'',chamber:'',floor:'',tickered:'0',watched:'0',
     type:sell?'sell':'buy',since:[ym+'-01',since||''].sort()[1],until:ym+'-31',
     sort:'date',dir:'desc',offset:0},extra||{});
   if(location.hash!=='#/explore') location.hash='#/explore'; else explore();
@@ -109,7 +110,7 @@ function clickMonth(r,since,extra){ return {
 }
 
 // --- explorer --------------------------------------------------------------
-const st={q:'',member:'',ticker:'',chamber:'',type:'',floor:'',since:'',until:'',tickered:'0',
+const st={q:'',member:'',ticker:'',chamber:'',type:'',floor:'',since:'',until:'',tickered:'0',watched:'0',
   sort:'date',dir:'desc',offset:0,limit:100};
 let timer=null;
 
@@ -132,6 +133,8 @@ async function explore(){
     <div><label>until</label><input id="f-until" placeholder="2025-12-31" value="${esc(st.until)}"></div>
     <div class="chk"><input type="checkbox" id="f-tickered"${st.tickered==='1'?' checked':''}>
       <label style="margin:0;text-transform:none;font-size:13px">tickered only</label></div>
+    <div class="chk"><input type="checkbox" id="f-watched"${st.watched==='1'?' checked':''}>
+      <label style="margin:0;text-transform:none;font-size:13px">watched only</label></div>
   </div><div id="rows"><div class="spin">loading...</div></div>`;
 
   const bind=(id,key,ev)=>{const el=$(id); if(!el) return;
@@ -141,7 +144,7 @@ async function explore(){
   bind('#f-ticker','ticker','change'); bind('#f-chamber','chamber','change');
   bind('#f-type','type','change'); bind('#f-floor','floor','input');
   bind('#f-since','since','input'); bind('#f-until','until','input');
-  bind('#f-tickered','tickered','change');
+  bind('#f-tickered','tickered','change'); bind('#f-watched','watched','change');
   rows();
 }
 
@@ -309,7 +312,8 @@ async function member(name){
     ${(d.committees||[]).length?`<h3>Committees</h3><div>${d.committees.map(c=>
       `<span class="pill">${esc(c.name||'')}</span>`).join('')}</div>`:''}
     ${d.wiki_url?`<p style="margin-top:1rem"><a href="${esc(d.wiki_url)}" target="_blank" rel="noopener">Wikipedia</a></p>`:''}
-    <p><button id="onlyme">show only their trades</button></p>`;
+    <p><button id="onlyme">show only their trades</button>
+      <button id="watchme" data-kind="member" data-value="${esc(name)}"></button></p>`;
   document.body.appendChild(el);
   annotate(el);
   if((d.top||[]).length){
@@ -334,6 +338,7 @@ async function member(name){
   $('#closep').onclick=()=>el.remove();
   $('#onlyme').onclick=()=>{ st.member=name; st.offset=0; el.remove();
     if(location.hash!=='#/explore') location.hash='#/explore'; else explore(); };
+  watchButton($('#watchme'));
 }
 
 // --- glossary hover layer --------------------------------------------------
@@ -638,7 +643,8 @@ async function tickerPanel(sym){
       <td class="${/^s/i.test(r.tx_type||'')?'neg':'pos'}">${esc(r.tx_type||'')}</td>
       <td class="num">${esc(r.amount_range||'')}</td>
       <td class="${cls(r.alpha)}">${pct(r.alpha)}</td></tr>`).join('')}</tbody></table></div>
-    <p style="margin-top:1rem"><button id="onlytk">show only this stock</button></p>`;
+    <p style="margin-top:1rem"><button id="onlytk">show only this stock</button>
+      <button id="watchtk" data-kind="ticker" data-value="${esc(d.ticker)}"></button></p>`;
   document.body.appendChild(el);
   drawPrice(d);
   if(d.months.length>1){
@@ -659,7 +665,76 @@ async function tickerPanel(sym){
   $('#closep').onclick=()=>el.remove();
   $('#onlytk').onclick=()=>{ st.ticker=d.ticker; st.member=''; st.q=''; st.offset=0;
     el.remove(); if(location.hash!=='#/explore') location.hash='#/explore'; else explore(); };
+  watchButton($('#watchtk'));
   annotate(el);
+}
+
+// --- watchlist ---------------------------------------------------------------
+// Members and tickers you follow. Saved in the database on this machine; every
+// trade they touch alerts and lands in the digest.
+let WATCH=null;
+async function loadWatch(){ WATCH=await (await fetch('/api/watch')).json(); return WATCH; }
+const watching=(kind,v)=>!!(WATCH&&WATCH[kind].some(x=>x.value===v));
+async function watchSet(kind,value,on){
+  const r=await (await fetch('/api/watch',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({kind,value,on})})).json();
+  if(!r.error) WATCH=r;
+  return r;
+}
+async function watchButton(b){
+  if(!b) return;
+  if(!WATCH) await loadWatch();
+  const draw=()=>{ const on=watching(b.dataset.kind,b.dataset.value);
+    b.textContent=on?'unwatch':'watch'; b.setAttribute('aria-pressed',on); };
+  draw();
+  b.onclick=async()=>{ b.disabled=true;
+    const r=await watchSet(b.dataset.kind,b.dataset.value,!watching(b.dataset.kind,b.dataset.value));
+    if(r.error) alert(r.error);
+    b.disabled=false; draw(); };
+}
+async function watchPage(){
+  app.innerHTML='<div class="spin">loading...</div>';
+  const w=await loadWatch();
+  if(!facets.members.length) facets=await (await fetch('/api/facets')).json();
+  const list=(kind,label)=>`<div class="chartbox"><h2>${label}</h2>${
+    w[kind].length?`<div class="tbl-scroll"><table><thead><tr><th>${kind}</th><th>name</th>
+      <th class="num">trades, 90 days</th><th></th></tr></thead><tbody>${w[kind].map(x=>`<tr>
+      <td>${kind==='ticker'?`<b class="mlink" data-t="${esc(x.value)}">${esc(x.value)}</b>`
+        :`<span class="mlink" data-m="${esc(x.value)}">${esc(x.value)}</span>`}</td>
+      <td>${esc(x.name)}</td><td class="num">${x.n90}</td>
+      <td><button data-rm-kind="${kind}" data-rm="${esc(x.value)}">remove</button></td></tr>`).join('')}
+      </tbody></table></div>`:'<p class="note">Nothing yet.</p>'}</div>`;
+  app.innerHTML=`<div class="chartbox"><h2>Add to your watchlist</h2>
+      <p class="cap">Every trade by these members, or in these tickers, raises an alert at
+      any size and appears in the digest. Tickers need not have been traded yet: list what
+      you own and you will hear if Congress trades it. Saved on this machine only.</p>
+      <div class="filters">
+        <div><label>watch</label><select id="w-kind"><option value="ticker">tickers</option>
+          <option value="member">a member</option></select></div>
+        <div style="grid-column:span 2"><label>value</label><input id="w-val" list="w-opts"
+          placeholder="AAPL MSFT NVDA" autocomplete="off"><datalist id="w-opts"></datalist></div>
+        <div class="chk"><button id="w-add">Add</button></div>
+      </div><p class="note" id="w-msg"></p></div>
+    ${list('member','Members')}${list('ticker','Tickers')}
+    <p><button id="w-explore">show their trades in Explore</button></p>`;
+  const kind=$('#w-kind'), val=$('#w-val'), msg=$('#w-msg');
+  const opts=()=>{ $('#w-opts').innerHTML=(kind.value==='member'
+      ?facets.members.map(m=>m.full_name||m.member):facets.tickers.map(t=>t.ticker))
+      .map(v=>`<option value="${esc(v)}">`).join('');
+    val.placeholder=kind.value==='member'?'any part of a name, e.g. Pelosi':'AAPL MSFT NVDA'; };
+  kind.onchange=opts; opts();
+  const add=async()=>{ if(!val.value.trim()) return;
+    const r=await watchSet(kind.value,val.value.trim(),true);
+    if(r.error){ msg.textContent=r.error; msg.className='note neg'; return; }
+    watchPage(); };
+  $('#w-add').onclick=add; val.onkeydown=e=>{ if(e.key==='Enter') add(); };
+  app.querySelectorAll('button[data-rm]').forEach(b=>b.onclick=async()=>{
+    await watchSet(b.dataset.rmKind,b.dataset.rm,false); watchPage(); });
+  app.querySelectorAll('.mlink').forEach(e=>e.onclick=()=>
+    e.dataset.t?tickerPanel(e.dataset.t):member(e.dataset.m));
+  $('#w-explore').onclick=()=>{ Object.assign(st,{q:'',member:'',ticker:'',chamber:'',type:'',
+    floor:'',since:'',until:'',tickered:'0',watched:'1',offset:0});
+    location.hash='#/explore'; };
 }
 
 // --- reports ---------------------------------------------------------------

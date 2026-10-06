@@ -184,6 +184,23 @@ Filings land on weekdays; member biographies barely change. A reasonable split:
 `--rotate N` re-checks the N least-recently-updated members, so a daily run cycles
 the whole roster over about a week while staying well inside Wikipedia's rate limit.
 
+## Watchlist
+
+Follow members, and tickers you own. Every trade they touch raises an alert at
+any size, gets its own section at the top of the digest, and can be filtered in
+the portal's Explore tab:
+
+```bash
+python -m congress_trades watch add ticker AAPL MSFT NVDA   # what you hold
+python -m congress_trades watch add member pelosi            # any part of a name
+python -m congress_trades watch rm ticker MSFT
+python -m congress_trades watch                              # list
+```
+
+Or use the portal's **Watchlist** tab, and the watch buttons in any member or
+ticker panel. The list lives in your database (`data/`, not in git), and the
+static page never includes it, so sharing that page shares nothing personal.
+
 ## Member scorecard
 
 Who is actually good at this, ranked, both directions:

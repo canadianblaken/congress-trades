@@ -150,6 +150,9 @@ TABS = {
     "explore": ("Explore", "Every disclosure, searchable and sortable: filter by "
                            "member, ticker, chamber, direction, size or date, and open "
                            "anyone's full record."),
+    "watch": ("Watchlist", "Members and tickers you follow (your own holdings, say). "
+                           "Every trade they touch raises an alert and appears in the "
+                           "digest. Personal: never on the shareable page."),
     "page": ("Full page", "The self-contained page `publish` writes: one HTML file "
                           "you can save, share or open without the portal."),
     "jobs": ("Maintenance", "Refresh the data, choose the AI model, and run the "
