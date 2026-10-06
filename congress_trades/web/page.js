@@ -122,11 +122,7 @@ function renderDetail() {
         ${links ? `<p class="links">${links}</p>` : ""}
       </div>
     </div>
-    <p class="meta">${rows.length} disclosed ${rows.length===1?"trade":"trades"} ·
-       ${buys} buys / ${sells} sells · largest bracket from ${top}
-       ${m.n !== m.full ? `<br><span style="color:var(--ink-3)">files as “${esc(m.n)}”</span>` : ""}</p>
-    ${lagLine(rows)}
-    ${unityLine(m)}
+    ${recordBlock(m, rows, buys, sells, top)}
     ${beyondBlock(m)}
     ${topTicks.length ? `<p class="toptick">Most traded: ${topTicks
         .map(([t,n]) => `${tk(t)} (${n})`).join(" · ")}</p>` : ""}
@@ -260,15 +256,32 @@ function wireChart(scope, onPick) {
    yea/nay votes matching their own party's majority. The meter is scaled 75-100%
    because essentially every member lands in that band -- a 0-100 axis would render
    every bar nearly full and show nothing. */
-function unityLine(m) {
-  if (m.unity == null) return "";
-  const lo = 75, pct = Math.max(0, Math.min(100, (m.unity - lo) / (100 - lo) * 100));
-  const col = m.party === "D" ? "var(--dem)" : m.party === "R" ? "var(--rep)" : "var(--ink-2)";
-  return `<p class="unity">Votes with own party <b>${m.unity}%</b>
-    <span class="meter" title="${m.unity}% (scale ${lo}-100%)">
-      <i style="width:${pct}%; background:${col}"></i></span>
-    <span style="color:var(--ink-3)">${(m.nvotes||0).toLocaleString()} roll calls,
-      119th Congress${m.nom != null ? ` · DW-NOMINATE ${m.nom > 0 ? "+" : ""}${m.nom.toFixed(2)}` : ""}</span></p>`;
+/* The portal panel's layout: label / value pairs. Counts follow the filters above;
+   the scoreboard figures are whole history at the default floor, said so in place. */
+function recordBlock(m, rows, buys, sells, top) {
+  const sc = SCORE.find(x => x.n === m.n), ls = lagStats(rows);
+  const sg = x => x == null ? "—" : `<span class="${x > 0 ? "up" : x < 0 ? "down" : ""}">${
+    x > 0 ? "+" : ""}${(x * 100).toFixed(1)}%</span>`;
+  const lo = 75, w = m.unity == null ? 0 : Math.max(0, Math.min(100, (m.unity - lo) / (100 - lo) * 100));
+  return `<div class="kv">
+    <b>disclosed trades</b><span>${rows.length.toLocaleString()} · ${buys} buys / ${sells} sells${
+      m.n !== m.full ? ` <span style="color:var(--ink-3)">· files as “${esc(m.n)}”</span>` : ""}</span>
+    <b>largest bracket</b><span>from ${top}</span>
+    ${sc ? `<b>alpha vs index</b><span>${sg(sc.med)} median over ${sc.t} scored trades
+             <span style="color:var(--ink-3)">· all history</span></span>
+           <b>vs sector</b><span>${sg(sc.smed)}</span>
+           <b>beat index</b><span>${Math.round(sc.beat * 100)}% of trades</span>`
+         : `<b>alpha</b><span style="color:var(--ink-3)">not scored: fewer than ${DATA.scoreMin}
+             measurable trades</span>`}
+    ${ls ? `<b>filing lag</b><span>median ${ls.median} days · ${ls.late
+        ? `<span class="lateflag">${ls.late} of ${ls.n} (${ls.pct}%) past the ${LATE_DAYS}-day deadline</span>`
+        : `never past the ${LATE_DAYS}-day deadline`}</span>` : ""}
+    ${m.unity != null ? `<b>votes with party</b><span>${m.unity}%
+        <span class="meter" title="${m.unity}% (scale ${lo}-100%)"><i style="width:${w}%;
+          background:${m.party === "D" ? "var(--dem)" : m.party === "R" ? "var(--rep)" : "var(--ink-2)"}"></i></span>
+        <span style="color:var(--ink-3)">${(m.nvotes || 0).toLocaleString()} roll calls</span></span>` : ""}
+    ${m.nom != null ? `<b>DW-NOMINATE</b><span>${m.nom > 0 ? "+" : ""}${m.nom.toFixed(2)}</span>` : ""}
+  </div>`;
 }
 
 const LATE_DAYS = __LATE_DAYS__;      // compliance.STATUTORY_DAYS, set at publish
@@ -289,15 +302,6 @@ function lagStats(rows) {
   const mid = Math.floor(lags.length / 2);
   const median = lags.length % 2 ? lags[mid] : Math.round((lags[mid-1] + lags[mid]) / 2);
   return {median, late, n: lags.length, pct: Math.round(late / lags.length * 100)};
-}
-
-function lagLine(rows) {
-  const s = lagStats(rows);
-  if (!s) return "";
-  return `<p class="lag">Files a median of <b>${s.median} days</b> after trading` +
-    (s.late ? ` · <span class="bad">${s.late} of ${s.n} (${s.pct}%) past the
-       ${LATE_DAYS}-day deadline</span>` : ` · all within the ${LATE_DAYS}-day deadline`) +
-    `</p>`;
 }
 
 function isLate(r) {
@@ -451,8 +455,9 @@ function renderScore() {
       <code>congress-trades prices</code> to attach returns.</p></div>`;
     return;
   }
+  // Sign is a mark, never the buy/sell colours: see common.css.
   const p = x => x == null ? "—"
-    : `<span style="color:var(--${x >= 0 ? "buy" : "sell"})">${(x*100 >= 0 ? "+" : "")
+    : `<span class="${x > 0 ? "up" : x < 0 ? "down" : ""}">${(x*100 >= 0 ? "+" : "")
        }${(x*100).toFixed(1)}%</span>`;
   const r0 = x => x == null ? "—" : Math.round(x*100) + "%";
   const head = [["med","vs index"],["smed","vs sector"],["beat","Beat index"],
@@ -462,9 +467,7 @@ function renderScore() {
   el.innerHTML = `
     <div class="panel">
       <h3>Member scoreboard</h3>
-      ${PERSIST.r == null ? "" : `<p style="border-left:3px solid var(--${
-        Math.abs(PERSIST.r) < 0.25 ? "sell" : "line-2"}); padding:.5rem .8rem;
-        margin:0 0 1rem; background:var(--bg); font-size:13px">
+      ${PERSIST.r == null ? "" : `<p class="callout">
         <b>Past alpha vs future alpha: r = ${PERSIST.r >= 0 ? "+" : ""}${
           PERSIST.r.toFixed(2)}</b> across ${PERSIST.n} members,
         ${Math.round(PERSIST.same_sign*100)}% keeping the same sign.
@@ -492,7 +495,7 @@ function renderScore() {
         <tbody>${rows.map((r, i) => `<tr>
           <td class="num">${i+1}</td>
           <td><b class="${pc(BY_NAME.get(r.n)?.party)}">${esc(r.n)}</b> <span style="color:var(--ink-3)">${esc(r.c[0] || "")}</span>
-            ${r.cs != null && r.cs >= 0.5 ? `<div style="color:var(--sell); font-size:11.5px;
+            ${r.cs != null && r.cs >= 0.5 ? `<div style="color:var(--warn); font-size:11.5px;
               margin:.15rem 0 0">one bet: ${Math.round(r.cs*100)}% of scored trades are
               <span title="${esc(tkName(r.ct))}">${esc(r.ct)}</span></div>` : ""}
             ${r.best ? `<div class="hint" style="margin:.15rem 0 0">${esc(r.best)}</div>` : ""}

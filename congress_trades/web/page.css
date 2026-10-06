@@ -31,7 +31,8 @@
   input[type=search] { min-width:230px; }
   input:focus-visible, select:focus-visible, button:focus-visible {
     outline:2px solid var(--link); outline-offset:1px; }
-  .wrap { display:grid; grid-template-columns:290px 1fr; gap:1.2rem; align-items:start; }
+  /* minmax(0,1fr): a long chart scrolls inside the detail instead of widening the page. */
+  .wrap { display:grid; grid-template-columns:290px minmax(0,1fr); gap:1.2rem; align-items:start; }
   @media (max-width:820px){ .wrap { grid-template-columns:1fr; } }
   .roster { background:var(--panel); border:1px solid var(--line); border-radius:8px;
             max-height:76vh; overflow-y:auto; }
@@ -91,7 +92,7 @@
   .tag.late { color:var(--warn); background:color-mix(in srgb, var(--warn) 10%, transparent); border:1px solid color-mix(in srgb, var(--warn) 40%, transparent); margin-left:.3rem; }
   .lag { color:var(--ink-2); font-size:12.5px; margin-top:.3rem; }
   .lag b { color:var(--ink); }
-  .lag .bad { color:var(--warn); }
+  .lag .bad, .lateflag { color:var(--warn); }
   .unity { color:var(--ink-2); font-size:12.5px; margin-top:.3rem; }
   .unity b { color:var(--ink); }
   .meter { display:inline-block; width:110px; height:7px; border-radius:4px;
