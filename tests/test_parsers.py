@@ -76,4 +76,30 @@ assert len(n) == 5, f"floor should drop the two $1,001 rows, kept {len(n)}"
 assert n[0]["tx_date"] == "2026-07-24", n[0]
 assert normalize(h, 10**9) == []
 
+# --- supersede: amendments replace, re-reports drop, first disclosure kept ----
+from congress_trades.collect import supersede
+def _t(doc, idx, asset, amount="$1,001 - $15,000", chamber="Senate", report="",
+       disclosed="2025-05-15", member="M"):
+    return {"chamber": chamber, "member": member, "doc_id": doc, "row_idx": idx,
+            "tx_date": "2025-04-15", "asset_name": asset, "amount_range": amount,
+            "tx_type": "buy", "owner": "Self", "report": report, "disclosed": disclosed}
+rows = [_t("orig", 0, "ADM", report="Periodic Transaction Report for 05/15/2025"),
+        _t("orig", 1, "AMGN", amount="$1,001 - $15,000",
+           report="Periodic Transaction Report for 05/15/2025"),
+        _t("amd", 0, "ADM", disclosed="2026-08-05",
+           report="Periodic Transaction Report for 05/15/2025 (Amendment 1)"),
+        _t("amd", 1, "AMGN", amount="$15,001 - $50,000", disclosed="2026-08-05",
+           report="Periodic Transaction Report for 05/15/2025 (Amendment 1)"),
+        # House: B repeats A's NVDA once, and has a genuine second lot plus a new trade
+        _t("A", 0, "NVDA", chamber="House", disclosed="2021-05-05"),
+        _t("B", 0, "NVDA", chamber="House", disclosed="2021-07-09"),
+        _t("B", 1, "NVDA", chamber="House", disclosed="2021-07-09"),
+        _t("B", 2, "AAPL", chamber="House", disclosed="2021-07-09")]
+kept, dropped = supersede(rows)
+k = {(r["doc_id"], r["row_idx"]): r for r in kept}
+assert set(k) == {("amd", 0), ("amd", 1), ("A", 0), ("B", 1), ("B", 2)}, sorted(k)
+assert {(r["doc_id"], r["row_idx"]) for r in dropped} == {("orig", 0), ("orig", 1), ("B", 0)}
+assert k[("amd", 0)]["disclosed"] == "2025-05-15", "an unchanged trade keeps its first disclosure"
+assert k[("amd", 1)]["disclosed"] == "2026-08-05", "a corrected trade is news on the amendment"
+
 print("ok: house PDF + senate HTML parsers, owner/ticker/type/amount, floor and ISO dates")

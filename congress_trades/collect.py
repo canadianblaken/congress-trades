@@ -380,13 +380,86 @@ def senate_transactions(cfg: Config, since: str, progress=None) -> list[dict]:
         except Exception as e:
             log.warning("senate report %s failed: %s", f["doc_id"], e)
             continue
+        report = _senate_title(body)
         for tx in parse_senate_report(body):
-            rows.append({**tx, "chamber": "Senate", "member": f["member"],
+            rows.append({**tx, "chamber": "Senate", "member": f["member"], "report": report,
                          "state": f["state"], "doc_id": f["doc_id"],
                          "doc_url": f["doc_url"], "disclosed": tx["disclosed"] or f["filed"]})
         if progress and i % 25 == 0:
             progress(f"senate: {i}/{len(filings)} filings")
     return rows
+
+
+def _senate_title(body: str) -> str:
+    """'Periodic Transaction Report for 05/15/2025 (Amendment 1)', or ''."""
+    m = re.search(r"<h1[^>]*>(.*?)</h1>", body, re.S)
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(1))).strip() if m else ""
+
+
+_AMENDMENT = re.compile(r"^(.*?)\s*\(Amendment (\d+)\)$")
+_TRADE_KEY = ("chamber", "member", "tx_date", "asset_name", "amount_range", "tx_type", "owner")
+
+
+def supersede(rows: list[dict]) -> tuple[list[dict], list[dict]]:
+    """(kept, dropped). Rows must already carry their row_idx.
+
+    Two ways the same trade reaches the data twice, and both inflated every count
+    built on it -- convergence most of all:
+
+      - A Senate amendment re-files the whole report, usually with corrections
+        (44 of 60 amended reports differed from their original). The highest
+        amendment of a member's "Report for <date>" replaces every earlier
+        version outright, so a corrected amount or a withdrawn line is gone
+        rather than counted alongside its correction.
+      - Any filing, either chamber, can repeat a trade an earlier one disclosed.
+        The House marks nothing, so this is matched on content: a later filing's
+        copy of an identical trade is dropped, counting repeats, so two genuine
+        identical lots in one filing both survive.
+
+    A trade the public already knew about keeps the date it was FIRST disclosed:
+    returns are measured from when the information became public, and an
+    amendment does not make it news again.
+    """
+    # 1. Senate amendments: the latest version of each report wins.
+    version: dict[tuple, int] = {}
+    for r in rows:
+        if r.get("chamber") == "Senate":
+            m = _AMENDMENT.match(r.get("report", "")) or None
+            base, n = (m.group(1), int(m.group(2))) if m else (r.get("report", ""), 0)
+            r["_report"], r["_version"] = (r["member"], base), n
+            version[r["_report"]] = max(version.get(r["_report"], 0), n)
+    first_seen: dict[tuple, str] = {}
+    for r in rows:
+        if "_report" in r:
+            k = tuple(r.get(f) for f in _TRADE_KEY)
+            if r.get("disclosed") and (k not in first_seen or r["disclosed"] < first_seen[k]):
+                first_seen[k] = r["disclosed"]
+    dropped = [r for r in rows if "_report" in r and r["_version"] < version[r["_report"]]]
+    out = [r for r in rows if not ("_report" in r and r["_version"] < version[r["_report"]])]
+    for r in out:
+        k = tuple(r.get(f) for f in _TRADE_KEY)
+        if "_report" in r and first_seen.get(k, r["disclosed"]) < r["disclosed"]:
+            r["disclosed"] = first_seen[k]
+
+    # 2. Re-reports: walk filings oldest first; a filing may repeat a trade only as
+    # many times as no earlier filing already has.
+    by_doc: dict[str, list[dict]] = {}
+    for r in out:
+        by_doc.setdefault(r["doc_id"], []).append(r)
+    order = sorted(by_doc, key=lambda d: (min(r.get("disclosed") or "9" for r in by_doc[d]), d))
+    seen: dict[tuple, int] = {}
+    kept = []
+    for d in order:
+        here: dict[tuple, int] = {}
+        for r in by_doc[d]:
+            k = tuple(r.get(f) for f in _TRADE_KEY)
+            here[k] = here.get(k, 0) + 1
+            (dropped if here[k] <= seen.get(k, 0) else kept).append(r)
+        for k, n in here.items():
+            seen[k] = max(seen.get(k, 0), n)
+    for r in rows:
+        r.pop("_report", None), r.pop("_version", None)
+    return kept, dropped
 
 
 # ----------------------------------------------------------------- normalize

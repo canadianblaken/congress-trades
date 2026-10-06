@@ -21,13 +21,23 @@ def backfill(cfg: Config = CONFIG, chamber: str = "both",
         rows += collect.senate_transactions(cfg, f"01/01/{min(years)}", progress=say)
 
     kept = collect.normalize(rows, cfg.min_amount)
+    # Positions first, then drop: row_idx is the storage key, so a filing's
+    # surviving rows must keep the positions they had before anything was removed.
+    per_doc: dict[str, int] = {}
+    for r in kept:
+        r["row_idx"] = per_doc.get(r["doc_id"], 0)
+        per_doc[r["doc_id"]] = r["row_idx"] + 1
+    kept, dropped = collect.supersede(kept)
     with db.connect(cfg.db_path) as conn:
         new = db.upsert_trades(conn, kept)
+        gone, redated = db.reconcile_trades(conn, kept, dropped)
         total = conn.execute("SELECT COUNT(*) FROM congress_trades").fetchone()[0]
         members = conn.execute(
             "SELECT COUNT(DISTINCT member) FROM congress_trades").fetchone()[0]
     print(f"parsed {len(rows)} transactions, {len(kept)} stored above "
-          f"${cfg.min_amount:,}; inserted {new} new -> {total} rows, {members} members")
+          f"${cfg.min_amount:,}; inserted {new} new -> {total} rows, {members} members"
+          + (f"; {len(dropped)} superseded or repeated ({gone} removed, "
+             f"{redated} re-dated to first disclosure)" if dropped or redated else ""))
     return 0
 
 

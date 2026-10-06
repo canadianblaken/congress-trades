@@ -393,6 +393,7 @@ def upsert_trades(conn: sqlite3.Connection, rows: list[dict]) -> int:
     for r in rows:
         idx = per_doc.get(r["doc_id"], 0)
         per_doc[r["doc_id"]] = idx + 1
+        idx = r.get("row_idx", idx)       # set by backfill before supersede() drops any
         cur = conn.execute(
             """INSERT OR IGNORE INTO congress_trades
                (chamber, member, state, owner, ticker, asset_name, tx_type, tx_date,
@@ -404,6 +405,36 @@ def upsert_trades(conn: sqlite3.Connection, rows: list[dict]) -> int:
              r["doc_id"], r.get("doc_url"), idx, now))
         new += cur.rowcount
     return new
+
+
+def reconcile_trades(conn: sqlite3.Connection, kept: list[dict],
+                     dropped: list[dict]) -> tuple[int, int]:
+    """(removed, re-dated). Apply collect.supersede() to rows already stored.
+
+    INSERT OR IGNORE never revisits a stored row, so a superseded version stays
+    unless removed here, and a kept row whose first disclosure was found in an
+    earlier version keeps its later date unless updated here. Either way its
+    forward returns were measured from the wrong row or date, so they go too and
+    `prices` recomputes them.
+    """
+    removed = redated = 0
+    for r in dropped:
+        for (i,) in conn.execute(
+                "SELECT id FROM congress_trades WHERE doc_id = ? AND row_idx = ?",
+                (r["doc_id"], r["row_idx"])).fetchall():
+            conn.execute("DELETE FROM trade_returns WHERE trade_id = ?", (i,))
+            conn.execute("DELETE FROM congress_trades WHERE id = ?", (i,))
+            removed += 1
+    for r in kept:
+        for (i,) in conn.execute(
+                "SELECT id FROM congress_trades WHERE doc_id = ? AND row_idx = ? "
+                "AND disclosed > ?",
+                (r["doc_id"], r["row_idx"], r.get("disclosed") or "")).fetchall():
+            conn.execute("UPDATE congress_trades SET disclosed = ? WHERE id = ?",
+                         (r["disclosed"], i))
+            conn.execute("DELETE FROM trade_returns WHERE trade_id = ?", (i,))
+            redated += 1
+    return removed, redated
 
 
 def all_trades(conn: sqlite3.Connection, since: str = "") -> list[sqlite3.Row]:
