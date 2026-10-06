@@ -537,8 +537,18 @@ terminal. The portal serves all of it on localhost, with no new dependencies:
 
 Reports run as subprocesses rather than imports, so what the page shows is
 byte-identical to what the CLI prints, and a crash in one report cannot take the
-server down. Every report's options are declared in a table in `portal.py`;
+server down. Every report's options are declared in a table in `portal/jobs.py`;
 nothing else from a URL is ever passed through to a subprocess.
+
+### Where the code is
+
+`congress_trades/portal/` is split by job: `server.py` (HTTP and the
+same-origin guard), `jobs.py` (the report and job tables, and the one job
+slot), `models.py` (the model picker), `api.py` (the JSON the app reads) and
+`pages.py` (HTML, including the pages that work without JavaScript). The front
+end is ordinary files in `congress_trades/web/`: `portal.*` for this app,
+`page.*` for the static page `publish` writes, and `common.js` for the helpers
+both use. `./run.sh test` runs every test and module selftest.
 
 ### Reading it from your phone
 
@@ -589,7 +599,7 @@ queued job would surprise whoever started it later.
 The model form is guarded the way a page holding an API key has to be: it accepts
 only requests from the portal's own page (same `Host`, same `Origin`, a JSON body),
 so another site open in the same browser cannot point your key somewhere else.
-Cloud endpoints are fixed in `portal.py` and never taken from the request; only the
+Cloud endpoints are fixed in `portal/models.py` and never taken from the request; only the
 local and custom entries accept a URL. The key is never sent back to the page.
 
 A job whose prerequisites are missing is disabled with the reason on the button —
