@@ -662,6 +662,11 @@ def api_trades(q: dict) -> dict:
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", since):
         where.append("COALESCE(NULLIF(t.disclosed,''), t.tx_date) >= ?")
         params.append(since)
+    # A string bound, so "2026-02-31" closes a month whatever its length.
+    until = (q.get("until") or [""])[0]
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", until):
+        where.append("COALESCE(NULLIF(t.disclosed,''), t.tx_date) <= ?")
+        params.append(until)
     if (q.get("tickered") or [""])[0] == "1":
         where.append("t.ticker != ''")
 
@@ -996,7 +1001,9 @@ def api_timeline(q: dict) -> dict:
         conn = _ro()
         rows = [dict(r) for r in conn.execute(sql, params).fetchall()]
         conn.close()
-        return {"rows": rows}
+        # The window's first month is usually partial; a click-through needs the cut.
+        cut = next((p for w, p in zip(where[1:], params) if w.startswith(DATED)), "")
+        return {"rows": rows, "since": cut}
     except sqlite3.Error as e:
         return {"rows": [], "error": str(e)}
 
@@ -1439,17 +1446,28 @@ async function drawActivity(){
           borderWidth:2,pointRadius:0,pointHoverRadius:5,tension:.25}]},
     options:{maintainAspectRatio:false,responsive:true,
       interaction:{mode:'index',intersect:false},
+      // The tooltip shows both lines; a click opens whichever is nearer the cursor.
+      onHover:(e,els)=>{e.native.target.style.cursor=els.length?'pointer':'default';},
+      onClick:(e,els,chart)=>{
+        const hit=chart.getElementsAtEventForMode(e,'nearest',{intersect:false,axis:'xy'},true)[0];
+        if(!hit) return;
+        const ym=r[hit.index].ym;
+        Object.assign(st,{q:'',member:'',ticker:'',chamber:'',floor:'',tickered:'0',
+          type:hit.datasetIndex?'sell':'buy',since:[ym+'-01',d.since||''].sort()[1],until:ym+'-31',
+          sort:'date',dir:'desc',offset:0});
+        if(location.hash!=='#/explore') location.hash='#/explore'; else explore();},
       plugins:{legend:{display:true,position:'top',align:'end',
           labels:{boxWidth:9,boxHeight:9,usePointStyle:true,pointStyle:'line',padding:14}},
         tooltip:Object.assign({},tip,{callbacks:{
-          label:c=>`${c.dataset.label}: ${c.parsed.y.toLocaleString()}`}})},
+          label:c=>`${c.dataset.label}: ${c.parsed.y.toLocaleString()}`,
+          footer:()=>'click a line to list them'}})},
       scales:{x:axis({grid:{display:false}}),
         y:axis({beginAtZero:true,ticks:{color:C.faint,padding:6,
           callback:v=>v.toLocaleString()}})}}});
 }
 
 // --- explorer --------------------------------------------------------------
-const st={q:'',member:'',ticker:'',chamber:'',type:'',floor:'',since:'',tickered:'0',
+const st={q:'',member:'',ticker:'',chamber:'',type:'',floor:'',since:'',until:'',tickered:'0',
   sort:'date',dir:'desc',offset:0,limit:100};
 let timer=null;
 
@@ -1469,6 +1487,7 @@ async function explore(){
       ['','buy','sell'].map(c=>`<option value="${c}"${st.type===c?' selected':''}>${c||'any'}</option>`).join('')}</select></div>
     <div><label>min amount</label><input id="f-floor" inputmode="numeric" placeholder="15001" value="${esc(st.floor)}"></div>
     <div><label>since</label><input id="f-since" placeholder="2025-01-01" value="${esc(st.since)}"></div>
+    <div><label>until</label><input id="f-until" placeholder="2025-12-31" value="${esc(st.until)}"></div>
     <div class="chk"><input type="checkbox" id="f-tickered"${st.tickered==='1'?' checked':''}>
       <label style="margin:0;text-transform:none;font-size:13px">tickered only</label></div>
   </div><div id="rows"><div class="spin">loading...</div></div>`;
@@ -1479,7 +1498,8 @@ async function explore(){
   bind('#f-q','q','input'); bind('#f-member','member','change');
   bind('#f-ticker','ticker','change'); bind('#f-chamber','chamber','change');
   bind('#f-type','type','change'); bind('#f-floor','floor','input');
-  bind('#f-since','since','input'); bind('#f-tickered','tickered','change');
+  bind('#f-since','since','input'); bind('#f-until','until','input');
+  bind('#f-tickered','tickered','change');
   rows();
 }
 
