@@ -264,6 +264,7 @@ def _prereq() -> dict:
     return {
         "model": model,
         "key": {"ok": key, "detail": "set" if key else "not set",
+                "url": "https://api.congress.gov/sign-up/",
                 "why": "CONGRESS_API_KEY is not set. It is free and instant at "
                        "https://api.congress.gov/sign-up/ — put it in .env."},
         "titles": {"ok": titled > 0, "detail": f"{titled:,} meetings have a title",
@@ -2255,7 +2256,9 @@ async function jobs(){
   const d=await (await fetch('/api/jobs')).json();
   const p=d.prereq;
   const row=(k,label)=>`<div><b>${esc(label)}</b> <span class="${p[k].ok?'num pos':'num neg'}">`+
-    `${p[k].ok?'ok':'not ready'}</span> &mdash; ${esc(p[k].detail)}</div>`;
+    `${p[k].ok?'ok':'not ready'}</span> &mdash; ${esc(p[k].detail)}`+
+    (!p[k].ok&&p[k].url?` &mdash; <a href="${esc(p[k].url)}" target="_blank" rel="noopener">`+
+      `get one free</a>, then add <code>CONGRESS_API_KEY=...</code> to <code>.env</code>`:'')+`</div>`;
   const cards=d.jobs.map(j=>{
     const dis=(!j.ready||d.running)?' disabled':'';
     const since=j.since?`<input id="since" value="2025-01-01" inputmode="numeric"
