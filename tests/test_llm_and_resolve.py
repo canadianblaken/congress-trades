@@ -100,7 +100,26 @@ assert s.base == "http://127.0.0.1:4000/v1", "the LiteLLM default is unchanged"
 _only(CONGRESS_LLM_PROVIDER="OLLAMA", CONGRESS_OLLAMA_MODEL="m")
 assert llm.settings().provider == "ollama", "the provider name is case-insensitive"
 
-for bad in ({"CONGRESS_LLM_PROVIDER": "anthropic", "CONGRESS_LLM_MODEL": "x"},
+_only(CONGRESS_LLM_PROVIDER="anthropic", CONGRESS_LLM_MODEL="claude-opus-5-5",
+      CONGRESS_LLM_KEY="sk-test")
+s = llm.settings()
+assert (s.provider, s.model, s.key) == ("anthropic", "claude-opus-5-5", "sk-test")
+
+# `ant auth login` leaves a profile the SDK reads itself, so no key is needed.
+import tempfile
+_anth = {k: os.environ.pop(k) for k in list(os.environ)
+         if k in ("ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_PROFILE", "ANTHROPIC_CONFIG_DIR")}
+with tempfile.TemporaryDirectory() as d:
+    os.environ["ANTHROPIC_CONFIG_DIR"] = d
+    assert llm.anthropic_login() == "", "no profile on disk means no login"
+    os.makedirs(os.path.join(d, "credentials"))
+    open(os.path.join(d, "credentials", "default.json"), "w").close()
+    assert llm.anthropic_login() == "ant auth login"
+    del os.environ["ANTHROPIC_CONFIG_DIR"]
+os.environ.update(_anth)
+
+for bad in ({"CONGRESS_LLM_PROVIDER": "nonesuch", "CONGRESS_LLM_MODEL": "x"},
+            {"CONGRESS_LLM_PROVIDER": "anthropic"},
             {"CONGRESS_LLM_PROVIDER": "ollama"},
             {}):
     _only(**bad)

@@ -5,6 +5,10 @@ Two providers, because they are two genuinely different things:
   openai   any /chat/completions endpoint -- OpenAI, LiteLLM, vLLM, OpenRouter,
            Groq, Together, and Ollama's own compatibility shim.
   ollama   Ollama's native /api/chat.
+  anthropic  Claude through the official `anthropic` SDK, imported only when this
+           provider is chosen, so everyone else keeps the one-dependency install.
+           Not Anthropic's OpenAI-compatible shim: structured output and refusal
+           handling are native-only.
 
 Ollama already answers the OpenAI shape on :11434/v1, so a second client needs a
 reason to exist. Three:
@@ -24,12 +28,17 @@ reason to exist. Three:
 Configured entirely by environment -- from your shell, or from the .env that
 config.load_env() now reads on every entry point rather than only under run.sh:
 
-    CONGRESS_LLM_PROVIDER       openai | ollama            (default: openai)
+    CONGRESS_LLM_PROVIDER       openai | ollama | anthropic   (default: openai)
 
     # provider = openai
     CONGRESS_LLM_BASE           default http://127.0.0.1:4000/v1
     CONGRESS_LLM_MODEL          required
     CONGRESS_LLM_KEY            bearer token, if the endpoint wants one
+
+    # provider = anthropic  (pip install anthropic)
+    CONGRESS_LLM_MODEL          e.g. claude-opus-5-5
+    CONGRESS_LLM_KEY            or ANTHROPIC_API_KEY -- or neither, after
+                                `ant auth login`, which the SDK reads itself
 
     # provider = ollama
     CONGRESS_OLLAMA_BASE        default http://127.0.0.1:11434
@@ -56,6 +65,12 @@ from dataclasses import dataclass
 from . import config as _config  # noqa: F401
 
 DEFAULT_TIMEOUT = 300
+ANTHROPIC_BASE = "https://api.anthropic.com"
+# Models that run Anthropic's safety classifiers and accept the server-side
+# fallback, which re-runs a declined request on another model inside the same
+# call. Elsewhere the parameter is left off.
+_FALLBACK_MODELS = {"claude-fable-5-1", "claude-opus-5-5", "claude-opus-5",
+                    "claude-sonnet-5-5"}
 
 
 class LLMError(RuntimeError):
@@ -92,10 +107,11 @@ class Settings:
 
 def settings() -> Settings:
     provider = os.getenv("CONGRESS_LLM_PROVIDER", "openai").strip().lower()
-    if provider not in ("openai", "ollama"):
+    if provider not in ("openai", "ollama", "anthropic"):
         raise SystemExit(
             f"CONGRESS_LLM_PROVIDER={provider!r} is not a provider. Use 'openai' "
-            "for any /chat/completions endpoint, or 'ollama' for a local Ollama.")
+            "for any /chat/completions endpoint, 'anthropic' for Claude, or "
+            "'ollama' for a local Ollama.")
     if provider == "ollama":
         model = os.getenv("CONGRESS_OLLAMA_MODEL", "").strip()
         if not model:
@@ -111,6 +127,13 @@ def settings() -> Settings:
             in ("1", "true", "yes", "on"),
             keep_alive=os.getenv("CONGRESS_OLLAMA_KEEP_ALIVE", "5m"))
     model = os.getenv("CONGRESS_LLM_MODEL", "").strip()
+    if provider == "anthropic":
+        if not model:
+            raise SystemExit("CONGRESS_LLM_MODEL is not set. Pick a Claude model, "
+                             "e.g. CONGRESS_LLM_MODEL=claude-opus-5-5.")
+        return Settings(provider="anthropic", model=model, base=ANTHROPIC_BASE,
+                        key=os.getenv("CONGRESS_LLM_KEY", "").strip()
+                        or os.getenv("ANTHROPIC_API_KEY", "").strip())
     if not model:
         raise SystemExit(
             "CONGRESS_LLM_MODEL is not set. Pick a model your endpoint serves, "
@@ -203,12 +226,108 @@ def _openai(s: Settings, system: str, prompt: str, schema: dict | None,
     raise last or LLMError("no attempt succeeded")
 
 
+def anthropic_login() -> str:
+    """How the SDK will authenticate when no key is given, or "" if it cannot.
+
+    `ant auth login` (Anthropic's CLI) signs in through the browser and leaves a
+    profile the SDK finds on its own, so there is no key to paste or store.
+    """
+    if os.getenv("ANTHROPIC_AUTH_TOKEN", "").strip():
+        return "ANTHROPIC_AUTH_TOKEN"
+    if os.getenv("ANTHROPIC_PROFILE", "").strip():
+        return f"ant profile {os.environ['ANTHROPIC_PROFILE'].strip()}"
+    cfg = os.getenv("ANTHROPIC_CONFIG_DIR") or os.path.join(
+        os.path.expanduser("~"), ".config", "anthropic")
+    try:
+        if any(f.endswith(".json") for f in os.listdir(os.path.join(cfg, "credentials"))):
+            return "ant auth login"
+    except OSError:
+        pass
+    return ""
+
+
+def _anthropic_sdk():
+    try:
+        import anthropic
+    except ImportError:
+        raise LLMError("the anthropic provider needs the official SDK: "
+                       "pip install anthropic") from None
+    return anthropic
+
+
+def _anthropic(s: Settings, system: str, prompt: str, schema: dict | None,
+               temperature: float, timeout: int) -> str:
+    # `temperature` is not sent: current Claude models reject sampling
+    # parameters outright, and the schema below is what keeps a reply in shape.
+    anthropic = _anthropic_sdk()
+    client = anthropic.Anthropic(api_key=s.key or None, timeout=timeout)
+    body = {"model": s.model, "max_tokens": 16000, "system": system,
+            "messages": [{"role": "user", "content": prompt}]}
+    if s.model in _FALLBACK_MODELS:
+        body |= {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+    create = client.beta.messages.create if "betas" in body else client.messages.create
+    # Like _openai: a schema the API will not take (it wants additionalProperties
+    # false throughout) is a 400, and the prompt spells the schema out anyway.
+    attempts = ([{"output_config": {"format": {"type": "json_schema", "schema": schema}}}]
+                if schema else []) + [{}]
+    for i, extra in enumerate(attempts):
+        try:
+            r = create(**body, **extra)
+        except anthropic.BadRequestError as e:
+            if i + 1 < len(attempts):
+                continue
+            raise LLMError(f"Anthropic answered 400: {e.message}", 400) from e
+        except anthropic.APIStatusError as e:
+            raise LLMError(f"Anthropic answered {e.status_code}: {e.message}",
+                           e.status_code) from e
+        except anthropic.APIConnectionError as e:
+            raise LLMError(f"cannot reach Anthropic: {e}") from e
+        if r.stop_reason == "refusal":
+            cat = getattr(r.stop_details, "category", None) if r.stop_details else None
+            raise LLMError(f"{s.model} declined the request"
+                           + (f" ({cat})" if cat else ""))
+        text = "".join(b.text for b in r.content if b.type == "text")
+        if not text:
+            raise LLMError(f"{s.model} returned no text (stop_reason {r.stop_reason})")
+        return text
+    raise LLMError("no attempt succeeded")
+
+
 def ask(prompt: str, system: str, timeout: int = DEFAULT_TIMEOUT,
         schema: dict | None = None, temperature: float = 0.2,
         s: Settings | None = None) -> str:
     s = s or settings()
-    fn = _ollama if s.provider == "ollama" else _openai
+    fn = {"ollama": _ollama, "anthropic": _anthropic}.get(s.provider, _openai)
     return fn(s, system, prompt, schema, temperature, timeout)
+
+
+def list_models(s: Settings, timeout: int = 15) -> list[str]:
+    """The model ids an endpoint says it serves -- the live answer to "which
+    model can I pick here", where any list written into this file would age."""
+    if s.provider == "anthropic":
+        anthropic = _anthropic_sdk()
+        try:
+            return [m.id for m in anthropic.Anthropic(
+                api_key=s.key or None, timeout=timeout).models.list()]
+        except anthropic.APIError as e:
+            raise LLMError(f"Anthropic: {getattr(e, 'message', e)}") from e
+    if s.provider == "ollama":
+        url, headers = f"{s.base}/api/tags", {}
+    else:
+        url = f"{s.base}/models"
+        headers = {"Authorization": f"Bearer {s.key}"} if s.key else {}
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers),
+                                    timeout=timeout) as r:
+            d = json.load(r)
+    except urllib.error.HTTPError as e:
+        raise LLMError(f"{url} answered {e.code}: "
+                       f"{e.read()[:200].decode(errors='replace')}", e.code) from e
+    except (urllib.error.URLError, ValueError, TimeoutError) as e:
+        raise LLMError(f"cannot reach {url}: {getattr(e, 'reason', e)}") from e
+    rows = d.get("models") if s.provider == "ollama" else d.get("data")
+    return sorted(m.get("name") or m.get("id") for m in rows or []
+                  if m.get("name") or m.get("id"))
 
 
 def ask_json(prompt: str, system: str, schema: dict,
@@ -242,6 +361,14 @@ def preflight(s: Settings | None = None) -> str:
     into a run.
     """
     s = s or settings()
+    if s.provider == "anthropic":
+        try:
+            _anthropic_sdk()
+        except LLMError as e:
+            raise SystemExit(str(e))
+        if not s.key and not anthropic_login():
+            raise SystemExit("No Anthropic credentials: run `ant auth login`, or "
+                             "set CONGRESS_LLM_KEY to an API key.")
     if s.provider == "ollama":
         try:
             with urllib.request.urlopen(f"{s.base}/api/tags", timeout=10) as r:
@@ -280,6 +407,8 @@ def check(s: Settings | None = None, timeout: int = 120) -> int:
         print(f"num_ctx      {s.num_ctx}")
         print(f"think        {'on' if s.think else 'off'}")
         print(f"keep_alive   {s.keep_alive}")
+    elif s.provider == "anthropic" and not s.key:
+        print(f"credentials  {anthropic_login() or 'none'}")
     else:
         print(f"api key      {'set' if s.key else 'not set'}")
     print(f"\nreachable    ", end="", flush=True)
@@ -355,7 +484,12 @@ def selftest():
              CONGRESS_LLM_BASE="https://api.example.com/v1/"):
         s = settings()
         assert s.provider == "openai" and s.base == "https://api.example.com/v1", s
-    for bad in ({"CONGRESS_LLM_PROVIDER": "anthropic"},
+    with env(CONGRESS_LLM_PROVIDER="anthropic", CONGRESS_LLM_MODEL="claude-opus-5-5",
+             CONGRESS_LLM_KEY="k"):
+        s = settings()
+        assert (s.provider, s.key, s.base) == ("anthropic", "k", ANTHROPIC_BASE), s
+    for bad in ({"CONGRESS_LLM_PROVIDER": "nonesuch"},
+                {"CONGRESS_LLM_PROVIDER": "anthropic", "CONGRESS_LLM_MODEL": ""},
                 {"CONGRESS_LLM_PROVIDER": "ollama", "CONGRESS_OLLAMA_MODEL": ""},
                 {"CONGRESS_LLM_PROVIDER": "openai", "CONGRESS_LLM_MODEL": ""}):
         with env(**{k: v for k, v in bad.items()}):
@@ -365,7 +499,7 @@ def selftest():
                 pass
             else:
                 raise AssertionError(f"{bad} should not have been accepted")
-    print("selftest ok: two providers, settings read at call time")
+    print("selftest ok: three providers, settings read at call time")
 
 
 if __name__ == "__main__":

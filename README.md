@@ -543,7 +543,7 @@ not have to be driven from a terminal:
 
 | | |
 |---|---|
-| **Model** | Which provider and model `advise`, `resolve` and `topics` will use, whether `CONGRESS_API_KEY` is set, and how many meetings have titles. **Check model** does the live round trip described above, including the JSON-schema step. |
+| **Model** | Pick the provider and model `advise`, `resolve` and `topics` will use — Anthropic, OpenAI, Google Gemini, xAI, Mistral, DeepSeek, Groq, OpenRouter, Together, a local Ollama, or a local OpenAI-compatible server (LiteLLM, LM Studio, vLLM). **List models** asks the provider what it serves; **Save** writes `.env` (mode 600) and applies to the next job started here. Also shows whether `CONGRESS_API_KEY` is set and how many meetings have titles. **Check model** does the live round trip described above, including the JSON-schema step. |
 | **Refresh data** | `all` — collect, enrich, classify, price, render. |
 | **Resolve untickered assets** | `resolve --apply`. |
 | **Fetch hearing titles** | `topics --stage fetch`, with the start date as a field. |
@@ -556,6 +556,12 @@ for its whole pass, and a second writer would die with "database is locked"
 partway through. Starting a second job is refused with the name of the one
 already running rather than queued, because these take minutes to hours and a
 queued job would surprise whoever started it later.
+
+The model form is guarded the way a page holding an API key has to be: it accepts
+only requests from the portal's own page (same `Host`, same `Origin`, a JSON body),
+so another site open in the same browser cannot point your key somewhere else.
+Cloud endpoints are fixed in `portal.py` and never taken from the request; only the
+local and custom entries accept a URL. The key is never sent back to the page.
 
 A job whose prerequisites are missing is disabled with the reason on the button —
 no model configured, no API key, no titles fetched yet — rather than failing a
@@ -624,8 +630,9 @@ that member's own median trade), **committee overlap** (a trade in a sector the
 member's own committee has jurisdiction over), and **track record** (share of
 closed 90-day windows that moved the way the member traded).
 
-`advise` posts that digest to a model. Two providers, picked with
-`CONGRESS_LLM_PROVIDER`:
+`advise` posts that digest to a model. Three providers, picked with
+`CONGRESS_LLM_PROVIDER` — or from the portal's Maintenance tab, which writes the
+same variables:
 
 ```bash
 # a local Ollama — its native API, not the /v1 shim
@@ -634,9 +641,14 @@ export CONGRESS_OLLAMA_MODEL=qwen3.8:27b            # required; `ollama list` sh
 export CONGRESS_OLLAMA_BASE=http://127.0.0.1:11434  # default
 export CONGRESS_OLLAMA_NUM_CTX=8192                 # default
 
+# or Claude, through the official SDK (pip install anthropic)
+export CONGRESS_LLM_PROVIDER=anthropic
+export CONGRESS_LLM_MODEL=claude-opus-5-5           # required
+export CONGRESS_LLM_KEY=sk-ant-...                  # or skip it: see "Signing in" below
+
 # or any OpenAI-compatible /chat/completions endpoint —
-# OpenAI, LiteLLM, vLLM, OpenRouter, Groq, Together all speak it, and
-# Anthropic models reach it through LiteLLM
+# OpenAI, Google Gemini, xAI, Mistral, DeepSeek, OpenRouter, Groq, Together,
+# LiteLLM and vLLM all speak it
 export CONGRESS_LLM_PROVIDER=openai                 # default
 export CONGRESS_LLM_BASE=http://127.0.0.1:4000/v1   # default; any compatible host
 export CONGRESS_LLM_MODEL=reason                    # required
@@ -645,6 +657,32 @@ export CONGRESS_LLM_KEY=...                         # if the endpoint wants one
 python -m congress_trades advise --days 90
 python -m congress_trades advise --dry-run          # print the prompt, call nothing
 ```
+
+#### Signing in to Anthropic instead of pasting a key
+
+Anthropic's CLI, `ant`, signs you in through the browser and leaves a profile the
+SDK reads on its own, so no key has to sit in `.env`. It is still your API account
+and its usage billing — a Claude Pro or Max subscription cannot power third-party
+tools, and the same goes for ChatGPT and Gemini consumer plans.
+
+```bash
+pip install anthropic                     # the SDK this provider uses
+
+# install ant: macOS
+brew install anthropics/tap/ant
+# Linux: the release tarball (see github.com/anthropics/anthropic-cli/releases)
+V=1.38.0; curl -fsSL "https://github.com/anthropics/anthropic-cli/releases/download/v$V/ant_${V}_linux_amd64.tar.gz" \
+  | tar -xz -C ~/.local/bin ant
+
+ant auth login                            # opens the browser; --no-browser on a headless box
+ant auth status                           # which credential won
+```
+
+Then choose Anthropic in the portal and leave the key blank, or set only
+`CONGRESS_LLM_PROVIDER=anthropic` and `CONGRESS_LLM_MODEL`. An exported
+`ANTHROPIC_API_KEY` outranks the login, even when empty, so unset it if the login
+seems ignored. Refresh tokens eventually expire; when a working setup starts
+failing authentication, run `ant auth login` again first.
 
 To check what you configured actually works — including the part `advise` does not
 need but `resolve` and `topics` depend on:
@@ -974,10 +1012,11 @@ All via environment variables; every one has a working default except the first.
 | `CONGRESS_DEFAULT_FLOOR` | `15001` | Floor the page *selects* by default |
 | `CONGRESS_NUMBER` | `119` | Congress to score votes for |
 | `CONGRESS_API_KEY` | *(unset)* | Congress.gov; meeting dates past the snapshot, and all meeting titles |
-| `CONGRESS_LLM_PROVIDER` | `openai` | `openai` or `ollama` |
+| `CONGRESS_LLM_PROVIDER` | `openai` | `openai`, `anthropic` or `ollama` |
 | `CONGRESS_LLM_BASE` | `http://127.0.0.1:4000/v1` | provider `openai`: any `/chat/completions` host |
-| `CONGRESS_LLM_MODEL` | *(unset)* | provider `openai`: required |
-| `CONGRESS_LLM_KEY` | *(unset)* | provider `openai`: bearer token, if wanted |
+| `CONGRESS_LLM_MODEL` | *(unset)* | providers `openai` and `anthropic`: required |
+| `CONGRESS_LLM_KEY` | *(unset)* | `openai`: bearer token, if wanted; `anthropic`: API key, optional after `ant auth login` |
+| `CONGRESS_LLM_PRESET` | *(unset)* | written by the portal's model form; which entry it shows |
 | `CONGRESS_OLLAMA_BASE` | `http://127.0.0.1:11434` | provider `ollama`: the native port, not `/v1` |
 | `CONGRESS_OLLAMA_MODEL` | *(unset)* | provider `ollama`: required |
 | `CONGRESS_OLLAMA_NUM_CTX` | `8192` | context per request; raise for long batches |

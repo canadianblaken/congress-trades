@@ -276,6 +276,148 @@ def _prereq() -> dict:
     }
 
 
+# --- model picker --------------------------------------------------------------
+# Every provider the Maintenance page offers. A cloud provider's endpoint is fixed
+# here and never taken from the request: the endpoint is where the API key gets
+# sent, so a page that could rewrite it could hand your key to anyone. Only the
+# local and custom entries take a base URL from the form.
+# Suggestions are a starting point; "List models" asks the provider itself.
+PRESETS = [
+    {"id": "anthropic", "label": "Anthropic (Claude)", "provider": "anthropic",
+     "base": "https://api.anthropic.com", "key": True,
+     "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5",
+                "claude-fable-5-1"]},
+    {"id": "openai", "label": "OpenAI", "provider": "openai",
+     "base": "https://api.openai.com/v1", "key": True},
+    {"id": "google", "label": "Google (Gemini)", "provider": "openai",
+     "base": "https://generativelanguage.googleapis.com/v1beta/openai", "key": True},
+    {"id": "xai", "label": "xAI (Grok)", "provider": "openai",
+     "base": "https://api.x.ai/v1", "key": True},
+    {"id": "mistral", "label": "Mistral", "provider": "openai",
+     "base": "https://api.mistral.ai/v1", "key": True},
+    {"id": "deepseek", "label": "DeepSeek", "provider": "openai",
+     "base": "https://api.deepseek.com/v1", "key": True},
+    {"id": "groq", "label": "Groq", "provider": "openai",
+     "base": "https://api.groq.com/openai/v1", "key": True},
+    {"id": "openrouter", "label": "OpenRouter (many providers)", "provider": "openai",
+     "base": "https://openrouter.ai/api/v1", "key": True},
+    {"id": "together", "label": "Together AI", "provider": "openai",
+     "base": "https://api.together.xyz/v1", "key": True},
+    {"id": "ollama", "label": "Local: Ollama", "provider": "ollama",
+     "base": "http://127.0.0.1:11434", "key": False, "editable": True},
+    {"id": "local", "label": "Local: LiteLLM / LM Studio / vLLM", "provider": "openai",
+     "base": "http://127.0.0.1:4000/v1", "key": False, "editable": True},
+    {"id": "custom", "label": "Other OpenAI-compatible endpoint", "provider": "openai",
+     "base": "", "key": False, "editable": True},
+]
+_PRESET = {p["id"]: p for p in PRESETS}
+MODEL_KEYS = ("CONGRESS_LLM_PRESET", "CONGRESS_LLM_PROVIDER", "CONGRESS_LLM_BASE",
+              "CONGRESS_LLM_MODEL", "CONGRESS_LLM_KEY", "CONGRESS_OLLAMA_BASE",
+              "CONGRESS_OLLAMA_MODEL")
+
+
+def model_current() -> dict:
+    """What is configured, for the form. The key itself never leaves the server."""
+    import os
+    g = lambda k: os.getenv(k, "").strip()
+    provider = g("CONGRESS_LLM_PROVIDER").lower() or "openai"
+    preset = g("CONGRESS_LLM_PRESET")
+    if preset not in _PRESET:
+        preset = {"ollama": "ollama", "anthropic": "anthropic"}.get(provider, "local")
+    ollama = provider == "ollama"
+    key = g("CONGRESS_LLM_KEY") or (g("ANTHROPIC_API_KEY") if provider == "anthropic" else "")
+    from . import llm
+    return {"preset": preset, "login": llm.anthropic_login(),
+            "base": g("CONGRESS_OLLAMA_BASE" if ollama else "CONGRESS_LLM_BASE")
+                    or _PRESET[preset]["base"],
+            "model": g("CONGRESS_OLLAMA_MODEL" if ollama else "CONGRESS_LLM_MODEL"),
+            "key_set": bool(key), "key_tail": key[-4:] if len(key) >= 12 else ""}
+
+
+def _model_settings(body: dict, for_save: bool):
+    """(preset, llm.Settings) from a form submission, or raise ValueError."""
+    from . import llm
+    import os
+    preset = _PRESET.get(str(body.get("preset", "")))
+    if not preset:
+        raise ValueError("unknown provider")
+    base = preset["base"]
+    if preset.get("editable"):
+        base = str(body.get("base", "")).strip().rstrip("/")
+        if not re.fullmatch(r"https?://[^\s/]+(/[^\s]*)?", base):
+            raise ValueError("the endpoint must be an http(s) URL")
+    model = str(body.get("model", "")).strip()
+    if for_save and not re.fullmatch(r"[\w.:/@+-]{1,200}", model):
+        raise ValueError("pick a model")
+    key = str(body.get("key", "")).strip()
+    if any(c in key for c in "\r\n") or len(key) > 500:
+        raise ValueError("that does not look like an API key")
+    login = preset["provider"] == "anthropic" and model_current()["login"]
+    if not key and not login and model_current()["preset"] == preset["id"]:
+        # Blank means "keep the saved one" -- but only for the same provider, so
+        # switching from one company to another never sends the old key along.
+        key = os.getenv("CONGRESS_LLM_KEY", "").strip() or (
+            os.getenv("ANTHROPIC_API_KEY", "").strip()
+            if preset["provider"] == "anthropic" else "")
+    if preset["key"] and not key and not login:
+        raise ValueError(f"{preset['label']} needs an API key"
+                         + (", or sign in with `ant auth login`"
+                            if preset["provider"] == "anthropic" else ""))
+    return preset, llm.Settings(provider=preset["provider"], model=model or "-",
+                                base=base, key=key)
+
+
+def _write_env(updates: dict[str, str]) -> None:
+    """Set KEY=value lines in .env in place, keeping every other line and comment.
+    Mode 600, because it now holds API keys."""
+    import os
+    from .config import ENV_FILE
+    lines = ENV_FILE.read_text().splitlines() if ENV_FILE.exists() else []
+    left = dict(updates)
+    out = []
+    for line in lines:
+        k = line.split("=", 1)[0].strip().removeprefix("export ").strip()
+        if k in left:
+            v = left.pop(k)
+            if v:
+                out.append(f"{k}={v}")
+        else:
+            out.append(line)
+    out += [f"{k}={v}" for k, v in left.items() if v]
+    tmp = ENV_FILE.with_suffix(".tmp")
+    tmp.write_text("\n".join(out) + "\n")
+    os.chmod(tmp, 0o600)
+    tmp.replace(ENV_FILE)
+
+
+def model_save(body: dict) -> dict:
+    """Write the choice to .env and into this process's environment, which every
+    job and report subprocess inherits -- so it applies to the next run without a
+    restart. A shell that exports these before starting the portal is overridden
+    here on purpose: the newest choice is the one on screen."""
+    import os
+    preset, st = _model_settings(body, for_save=True)
+    ollama = st.provider == "ollama"
+    updates = {"CONGRESS_LLM_PRESET": preset["id"], "CONGRESS_LLM_PROVIDER": st.provider}
+    if ollama:
+        updates |= {"CONGRESS_OLLAMA_BASE": st.base, "CONGRESS_OLLAMA_MODEL": st.model}
+    else:
+        updates |= {"CONGRESS_LLM_BASE": st.base if st.provider == "openai" else "",
+                    "CONGRESS_LLM_MODEL": st.model, "CONGRESS_LLM_KEY": st.key}
+    _write_env(updates)
+    for k, v in updates.items():
+        if v:
+            os.environ[k] = v
+        else:
+            os.environ.pop(k, None)
+    return model_current()
+
+
+def model_list(body: dict) -> list[str]:
+    from . import llm
+    return llm.list_models(_model_settings(body, for_save=False)[1])
+
+
 # --- database summary --------------------------------------------------------
 
 def stats() -> dict:
@@ -1065,9 +1207,45 @@ class Handler(BaseHTTPRequestHandler):
         self._send(json.dumps(obj, default=str).encode("utf-8"),
                    "application/json; charset=utf-8", code)
 
+    def _same_origin(self) -> bool:
+        """Only this portal's own page may change the model. Without this, any
+        website open in the same browser could POST here -- or reach it through a
+        rebound DNS name -- and point your API key at a server of its choosing."""
+        port = self.server.server_address[1]
+        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        origin = self.headers.get("Origin")
+        return (self.headers.get("Host") in hosts
+                and (origin is None or origin.removeprefix("http://") in hosts)
+                and (self.headers.get("Content-Type") or "").startswith("application/json"))
+
+    def _body(self) -> dict:
+        n = int(self.headers.get("Content-Length") or 0)
+        if not 0 < n <= 8192:
+            return {}
+        try:
+            d = json.loads(self.rfile.read(n))
+        except ValueError:
+            return {}
+        return d if isinstance(d, dict) else {}
+
     def do_POST(self):
         u = urlparse(self.path)
         path, q = u.path, parse_qs(u.query)
+        if path in ("/api/model", "/api/models"):
+            if not self._same_origin():
+                self._json({"error": "refused: not from this portal's page"}, 403)
+                return
+            from . import llm
+            try:
+                if path == "/api/model":
+                    self._json({"current": model_save(self._body())})
+                else:
+                    self._json({"models": model_list(self._body())})
+            except ValueError as e:
+                self._json({"error": str(e)}, 400)
+            except llm.LLMError as e:
+                self._json({"error": str(e)}, 502)
+            return
         if path == "/refresh":
             started = start_refresh()
             self._json({"started": started, "running": _refresh["running"]})
@@ -1119,6 +1297,9 @@ class Handler(BaseHTTPRequestHandler):
                         "verb": JOBS.get(job, {}).get("verb", "Running"),
                         "elapsed": int(time.time() - _refresh["started"])
                         if _refresh["started"] else 0})
+            return
+        if path == "/api/model":
+            self._json({"presets": PRESETS, "current": model_current()})
             return
         if path == "/api/jobs":
             pre = _prereq()
@@ -2087,7 +2268,17 @@ async function jobs(){
   }).join('');
   app.innerHTML=`<div class="chartbox"><h2>Model</h2>
       <p class="cap">What <code>advise</code>, <code>resolve</code> and <code>topics</code>
-      will use. Set it in <code>.env</code>; a shell export beats the file.</p>
+      will use. Saved to <code>.env</code> and used by the next job you start here.</p>
+      <div class="filters" id="mform">
+        <div><label>provider</label><select id="m-preset"></select></div>
+        <div id="m-basebox"><label>endpoint</label><input id="m-base"></div>
+        <div id="m-keybox"><label>API key</label><input id="m-key" type="password"
+          autocomplete="off" spellcheck="false"></div>
+        <div><label>model</label><input id="m-model" list="m-models" autocomplete="off"
+          spellcheck="false"><datalist id="m-models"></datalist></div>
+        <div class="chk"><button id="m-list">List models</button>
+          <button id="m-save">Save</button></div>
+      </div><p class="note" id="m-msg"></p>
       ${row('model','Model')}${row('key','Congress.gov key')}${row('titles','Meeting titles')}
       <p class="note">The check below is a live round trip. Its last step asks for JSON
       constrained by a schema &mdash; the part <code>resolve</code> and <code>topics</code>
@@ -2098,6 +2289,7 @@ async function jobs(){
     <p class="note">Each of these writes to the database, so only one runs at a time and
     they share the slot with a refresh. Progress shows in the bar at the top of the page.</p>
     ${cards}`;
+  modelForm();
   $('#llmck').onclick=async e=>{
     const b=e.target, out=$('#llmout');
     b.disabled=true; b.textContent='checking...';
@@ -2115,6 +2307,56 @@ async function jobs(){
     if(!r.started){ alert(r.why||'could not start'); b.disabled=false; return; }
     tick(); jobs();
   };});
+}
+
+// --- model picker -----------------------------------------------------------
+async function modelForm(){
+  const {presets,current:cur}=await (await fetch('/api/model')).json();
+  const P=Object.fromEntries(presets.map(p=>[p.id,p]));
+  const sel=$('#m-preset'), base=$('#m-base'), key=$('#m-key'), model=$('#m-model'),
+    dl=$('#m-models'), msg=$('#m-msg');
+  if(!sel) return;
+  sel.innerHTML=presets.map(p=>`<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+  const say=(t,bad)=>{msg.textContent=t; msg.className='note'+(bad?' neg':'');};
+  const fill=list=>{dl.innerHTML=(list||[]).map(m=>`<option value="${esc(m)}">`).join('');};
+  // Same-provider fields keep what is saved; switching provider starts clean,
+  // and the saved key is never offered to a different company.
+  const show=keep=>{
+    const p=P[sel.value], same=keep&&sel.value===cur.preset;
+    base.value=same?cur.base:p.base; base.readOnly=!p.editable;
+    $('#m-basebox').style.opacity=p.editable?1:.6;
+    model.value=same?cur.model:''; key.value=''; fill(p.models);
+    key.placeholder=p.provider==='anthropic'&&cur.login?`blank: signed in (${cur.login})`
+      :same&&cur.key_set?`saved${cur.key_tail?' (...'+cur.key_tail+')':''} - blank keeps it`
+      :p.provider==='anthropic'?'API key, or run: ant auth login':(p.key?'required':'optional');
+    $('#m-keybox').style.display=p.provider==='ollama'?'none':'';
+    model.placeholder=(p.models&&p.models[0])||'List models, or type one';
+    say('');
+  };
+  sel.value=cur.preset; show(true);
+  sel.onchange=()=>show(true);
+  const body=()=>JSON.stringify({preset:sel.value,base:base.value.trim(),
+    key:key.value.trim(),model:model.value.trim()});
+  const post=async url=>{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:body()});
+    return r.json();};
+  $('#m-list').onclick=async e=>{
+    e.target.disabled=true; say('asking the provider...');
+    try{ const r=await post('/api/models');
+      if(r.error) say(r.error,true);
+      else{ fill([...new Set([...(P[sel.value].models||[]),...r.models])]);
+        say(`${r.models.length} models available - pick one in the model box.`); model.focus(); }
+    }catch(err){ say('could not reach the portal',true); }
+    e.target.disabled=false;
+  };
+  $('#m-save').onclick=async e=>{
+    e.target.disabled=true;
+    try{ const r=await post('/api/model');
+      if(r.error){ say(r.error,true); e.target.disabled=false; return; }
+      await jobs(); const m=$('#m-msg');
+      if(m){ m.textContent='Saved. Press Check model to try it.'; m.className='note pos'; }
+    }catch(err){ say('could not reach the portal',true); e.target.disabled=false; }
+  };
 }
 
 function full(){
