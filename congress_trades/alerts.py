@@ -49,8 +49,38 @@ CONVERGE_WINDOW = 30
 QUALIFIERS = ("filed", "large")
 
 
+# A trade is remembered by what it IS, not by its row id. Ids change whenever the
+# table is rebuilt or an amendment replaces the filing a trade came from, and an
+# id-keyed memory re-alerts all of history at the next run. `occ` numbers
+# identical lines (two same-day lots) so each still alerts once.
+_OCC = """ROW_NUMBER() OVER (PARTITION BY t.chamber, t.member, t.tx_date, t.ticker,
+              t.amount_range, t.tx_type, t.owner
+              ORDER BY t.disclosed, t.doc_id, t.row_idx)"""
+
+
+def _trade_fp(r) -> str:
+    return "trade:" + "|".join(str(r[k] or "") for k in (
+        "chamber", "member", "tx_date", "ticker", "amount_range", "tx_type", "owner", "occ"))
+
+
 def _fingerprints(conn) -> set[str]:
+    _migrate_ids(conn)
     return {r["fingerprint"] for r in conn.execute("SELECT fingerprint FROM alerts_seen")}
+
+
+def _migrate_ids(conn) -> None:
+    """Translate the old `trade:<id>` memory to content fingerprints, once."""
+    old = {int(f[6:]): seen for f, seen in conn.execute(
+        "SELECT fingerprint, first_seen FROM alerts_seen "
+        "WHERE fingerprint GLOB 'trade:[0-9]*' AND fingerprint NOT GLOB '*|*'")}
+    if not old:
+        return
+    for r in conn.execute(f"SELECT t.*, {_OCC} AS occ FROM congress_trades t"):
+        if r["id"] in old:
+            conn.execute("INSERT OR IGNORE INTO alerts_seen (fingerprint, first_seen) "
+                         "VALUES(?,?)", (_trade_fp(r), old[r["id"]]))
+    conn.execute("DELETE FROM alerts_seen WHERE fingerprint GLOB 'trade:[0-9]*' "
+                 "AND fingerprint NOT GLOB '*|*'")
 
 
 def _remember(conn, fps: list[str]) -> None:
@@ -72,11 +102,11 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
     with db.connect(cfg.db_path) as conn:
         seen = _fingerprints(conn)
         rows = [dict(r) for r in conn.execute(
-            """SELECT t.id, t.member, t.chamber, t.ticker, t.tx_type, t.tx_date,
-                      t.disclosed, t.amount_min, t.amount_range, t.owner,
+            f"""SELECT t.id, t.member, t.chamber, t.ticker, t.tx_type, t.tx_date,
+                      t.disclosed, t.amount_min, t.amount_range, t.owner, t.occ,
                       COALESCE(s.sector,'') AS sector,
                       COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0
-                 FROM congress_trades t
+                 FROM (SELECT t.*, {_OCC} AS occ FROM congress_trades t) t
                  LEFT JOIN ticker_sectors s ON s.ticker = t.ticker
                 WHERE t.ticker != ''
                   AND COALESCE(NULLIF(t.disclosed,''), t.tx_date) >= ?""", (since,))]
@@ -121,7 +151,7 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
             # the first version's behaviour and produced five a day.
             if not any(not x.startswith(QUALIFIERS) for x in reasons):
                 continue
-            fp = f"trade:{r['id']}"
+            fp = _trade_fp(r)
             if fp in seen:
                 continue
             out.append({"kind": "trade", "fp": fp, "member": r["member"],
