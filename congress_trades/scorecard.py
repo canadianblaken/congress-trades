@@ -32,8 +32,16 @@ HORIZONS = ("30", "90")
 
 def alpha(tx_type: str, ret: float | None, bench: float | None) -> float | None:
     """Excess return in the direction the member took. None if either leg is
-    missing -- an unmeasurable trade must not score as a zero."""
-    if ret is None or bench is None:
+    missing -- an unmeasurable trade must not score as a zero.
+
+    A trade with no direction has no alpha either. Exchanges are the case: the
+    filings carry type E, the Senate writes "Exchange" outright, and neither is
+    a view on the price. This used to read `if sell else buy`, which scored
+    every one of them as a purchase -- harmless while three rows in the data
+    were exchanges, and not harmless once the House parser learned to read the
+    other sixty-five.
+    """
+    if ret is None or bench is None or tx_type not in ("buy", "sell"):
         return None
     return (bench - ret) if tx_type == "sell" else (ret - bench)
 

@@ -256,7 +256,8 @@ def ensure_meetings(cfg=CONFIG, quiet: bool = True) -> int:
         return conn.execute("SELECT count(*) FROM committee_meetings").fetchone()[0]
 
 
-def load(floor: int = 1, window: int = 30, cfg=CONFIG):
+def load(floor: int = 1, window: int = 30, cfg=CONFIG,
+         sector_matched: bool = False):
     """Each priced trade, with the signed distance in days to the nearest meeting
     of a committee that member actually sits on.
 
@@ -264,35 +265,57 @@ def load(floor: int = 1, window: int = 30, cfg=CONFIG):
     insider thesis predicts. Only meetings within `window` days are considered;
     beyond that the nearest meeting says nothing, since busy committees meet
     constantly.
+
+    With `sector_matched`, a meeting only counts when what it was about overlaps
+    the industry of the company traded -- the hearing's tags from topics.py
+    against the trade's own ticker_sectors row. That is a much narrower and much
+    more meaningful treatment group than "their committee met that week", and it
+    is the arm this test should have had from the start. It needs `topics` to
+    have run; with no tags stored, nothing matches and the caller is told so
+    rather than shown an empty result.
     """
     import datetime as dt
 
-    from . import scorecard
+    from . import scorecard, topics
     with db.connect(cfg.db_path) as conn:
         roots = _member_roots(conn)
+        tags = topics.sectors_by_event(conn) if sector_matched else {}
         meetings: dict[str, list] = {}
-        for r in conn.execute("SELECT meeting_date, roots, type FROM committee_meetings "
-                              "WHERE meeting_date != ''"):
+        for r in conn.execute("SELECT event_id, meeting_date, roots, type "
+                              "FROM committee_meetings WHERE meeting_date != ''"):
+            if sector_matched and not tags.get(r["event_id"]):
+                continue          # untagged, or tagged as bearing on no industry
             for root in (r["roots"] or "").split(","):
                 if root:
                     meetings.setdefault(root, []).append(
-                        (dt.date.fromisoformat(r["meeting_date"]), r["type"]))
+                        (dt.date.fromisoformat(r["meeting_date"]), r["type"],
+                         r["event_id"]))
         for v in meetings.values():
             v.sort()
         rows = [dict(r) for r in conn.execute(
             """SELECT t.member, t.ticker, t.tx_type, t.tx_date, t.disclosed,
                       t.amount_min, r.ret_90, r.bench_90, r.sec_90,
+                      COALESCE(s.sector, '') AS sector,
                       COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0
                  FROM congress_trades t
                  JOIN trade_returns r ON r.trade_id = t.id
+                 LEFT JOIN ticker_sectors s ON s.ticker = t.ticker
                 WHERE t.ticker != '' AND t.amount_min >= ? AND t.tx_date != ''
                   AND r.ret_90 IS NOT NULL AND r.bench_90 IS NOT NULL""", (floor,))]
 
-    out, no_seat, no_meeting = [], 0, 0
+    out, no_seat, no_meeting, no_sector = [], 0, 0, 0
     for r in rows:
         mine = roots.get(r["member"])
         if not mine:
             no_seat += 1
+            continue
+        if sector_matched and r["sector"] in ("", "Unclassified"):
+            # No usable industry for the ticker means no possible match --
+            # "Unclassified" is a failed SIC lookup, and topics.py refuses to
+            # emit it as a hearing subject, so it could never pair with anything.
+            # Counted apart from "no meeting", because it is a gap in the sector
+            # data rather than evidence that no relevant hearing took place.
+            no_sector += 1
             continue
         try:
             td = dt.date.fromisoformat(r["tx_date"])
@@ -300,19 +323,23 @@ def load(floor: int = 1, window: int = 30, cfg=CONFIG):
             continue
         best = None
         for root in mine:
-            for mdate, mtype in meetings.get(root, ()):
+            for mdate, mtype, event_id in meetings.get(root, ()):
+                if sector_matched and r["sector"] not in tags.get(event_id, ()):
+                    continue
                 delta = (td - mdate).days           # <0: trade before the meeting
                 if abs(delta) <= window and (best is None or abs(delta) < abs(best[0])):
-                    best = (delta, mtype, root)
+                    best = (delta, mtype, root, event_id)
         if best is None:
             no_meeting += 1
             continue
-        r["days"], r["mtype"], r["root"] = best
+        r["days"], r["mtype"], r["root"], r["event_id"] = best
         r["alpha"] = scorecard.alpha(r["tx_type"], r["ret_90"], r["bench_90"])
         if r["alpha"] is not None:
             out.append(r)
     return out, {"no_seat": no_seat, "no_meeting_in_window": no_meeting,
-                 "considered": len(rows)}
+                 "no_sector_on_ticker": no_sector, "considered": len(rows),
+                 "sector_matched": sector_matched,
+                 "meetings_available": sum(len(v) for v in meetings.values())}
 
 
 DAY_BUCKETS = ((-30, -15), (-14, -8), (-7, -3), (-2, -1), (0, 0), (1, 2), (3, 7),
@@ -379,28 +406,57 @@ def before_vs_after(rows, days: int = 7) -> dict:
             "rest": side([r for r in rows if abs(r["days"]) > days])}
 
 
-def build(floor: int = 1, window: int = 30, cfg=CONFIG) -> dict:
+def build(floor: int = 1, window: int = 30, cfg=CONFIG,
+          sector_matched: bool = False) -> dict:
+    from . import topics
     ensure_meetings(cfg)
-    rows, counts = load(floor, window, cfg)
+    rows, counts = load(floor, window, cfg, sector_matched)
     return {"n": len(rows), "window": window, "coverage": counts,
             "buckets": by_days(rows), "split": before_vs_after(rows),
-            "types": sorted({r["mtype"] for r in rows})}
+            "types": sorted({r["mtype"] for r in rows}),
+            "sector_matched": sector_matched,
+            "topics": topics.coverage(cfg) if sector_matched else None}
 
 
 def to_markdown(d: dict) -> str:
     from . import scorecard
     p = scorecard.pct
     c = d["coverage"]
-    L = [f"# Committee timing — do members trade around their own hearings?", "",
-         f"{d['n']:,} priced trades fall within {d['window']} days of a meeting held "
-         "by a committee that member sits on. Of "
-         f"{c['considered']:,} considered, {c['no_seat']:,} had no committee seat on "
-         f"record and {c['no_meeting_in_window']:,} had no relevant meeting in the "
-         "window.", "",
-         "Negative days mean the trade came **before** the meeting, which is the "
-         "direction the insider thesis predicts. Committees are matched on the root "
-         "of their system code, so a subcommittee meeting counts for the parent "
-         "committee's members. Intervals resample whole months.", "",
+    matched = d.get("sector_matched")
+    L = [f"# Committee timing — do members trade around their own hearings?", ""]
+    if matched:
+        t = d.get("topics") or {}
+        L += [f"**Sector-matched arm.** A meeting counts only where what it was "
+              f"about overlaps the industry of the company traded. "
+              f"{d['n']:,} priced trades fall within {d['window']} days of such a "
+              f"meeting. Of {c['considered']:,} considered, {c['no_seat']:,} had no "
+              f"committee seat on record, {c['no_sector_on_ticker']:,} had no "
+              f"industry on the ticker, and {c['no_meeting_in_window']:,} had no "
+              "hearing on their own industry in the window.", "",
+              f"Topics come from {t.get('tagged', 0):,} tagged meeting titles of "
+              f"{t.get('meetings', 0):,} stored, {t.get('with_sector', 0):,} of "
+              f"which bear on any industry"
+              + (f" (tagged by {', '.join(t.get('models') or [])})" if t.get("models") else "")
+              + ". A meeting with no title, or one tagged as bearing on no "
+              "industry, is excluded from this arm entirely.", ""]
+    else:
+        L += [f"{d['n']:,} priced trades fall within {d['window']} days of a meeting "
+              "held by a committee that member sits on. Of "
+              f"{c['considered']:,} considered, {c['no_seat']:,} had no committee seat "
+              f"on record and {c['no_meeting_in_window']:,} had no relevant meeting in "
+              "the window.", ""]
+        if c["considered"] and d["n"] / max(1, c["considered"] - c["no_seat"]) > 0.8:
+            L += ["**Note how little this narrows anything.** Busy committees meet "
+                  "weekly, so nearly every trade by a member with a seat lands within "
+                  f"{d['window']} days of one of their meetings. A treatment group "
+                  "that is almost everybody cannot show much. `timing "
+                  "--sector-matched` runs the same test against only those meetings "
+                  "whose subject touches the industry traded, which is the version "
+                  "worth reading — it needs `topics` to have run first.", ""]
+    L += ["Negative days mean the trade came **before** the meeting, which is the "
+          "direction the insider thesis predicts. Committees are matched on the root "
+          "of their system code, so a subcommittee meeting counts for the parent "
+          "committee's members. Intervals resample whole months.", "",
          "| days from meeting | trades | members | top 3 members | median α "
          "| 90% by month |",
          "|---|--:|--:|--:|--:|:--:|"]
@@ -432,6 +488,25 @@ def to_markdown(d: dict) -> str:
         L.append("**No timing bucket has an interval that misses zero.** Trading "
                  "close to a hearing of one's own committee is not measurably "
                  "different from trading at any other time.")
+        if matched and d["buckets"]:
+            # A null at n=40 a bucket is not the same claim as a null at n=1,500,
+            # and the difference matters most here: narrowing the treatment group
+            # is the whole point of this arm, and it costs exactly the power that
+            # would be needed to show something. Saying "no effect" on this
+            # evidence would be the arm's own success misread as a finding.
+            small = sorted(b["n"] for b in d["buckets"])
+            mid = small[len(small) // 2]
+            L += ["",
+                  f"**Read that as underpowered, not as absence.** The buckets "
+                  f"here hold about {mid:,} trades each, against thousands in the "
+                  "arm that counts any meeting, because requiring the hearing to "
+                  "be about the industry traded is what this arm is for. Compare "
+                  "the medians before concluding anything: if they are as large "
+                  "as the wider arm's and only the intervals have grown, the test "
+                  "has lost the power to resolve an effect, not found it absent. "
+                  "Nothing here licenses 'Congress does not trade ahead of its "
+                  "own hearings'; it licenses only 'this sharper test cannot "
+                  "tell'."]
     elif not real:
         names = ", ".join(f"{b['lo']} to {b['hi']} days" for b in raw)
         L += [f"**Nothing survives the correction for testing {k} buckets.** "
@@ -454,11 +529,25 @@ def to_markdown(d: dict) -> str:
           "fall away.** Check the gradient: if a middle bucket is up while the days "
           "immediately before a meeting are flat, that shape argues for noise, not "
           "for foreknowledge.",
-          "- **Proximity is not jurisdiction.** These rows say the member sits on a "
-          "committee that met near the trade, not that the committee had any "
-          "business with the company traded. Busy committees meet weekly.",
+          ("- **Subject matching is a model's reading of a meeting title.** A "
+           "title is a few words and often names a bill rather than a topic, so "
+           "the tags are approximate in both directions: a hearing whose real "
+           "subject never reached its title is missed, and a loose tag puts an "
+           "unrelated trade in the treatment group. This arm is narrower than "
+           "proximity alone, not clean."
+           if matched else
+           "- **Proximity is not jurisdiction.** These rows say the member sits on "
+           "a committee that met near the trade, not that the committee had any "
+           "business with the company traded. Busy committees meet weekly. "
+           "`timing --sector-matched` is the version that asks about subject."),
           "- **Check the member columns.** A bucket whose top three members supply "
           "half its trades is a claim about three people, whatever its interval."]
+    if matched:
+        L += ["- **This is a second family of tests.** The correction above covers "
+              "the buckets within this arm only. Running both the plain and the "
+              "sector-matched arm and reporting whichever looks better is exactly "
+              "the multiple-comparisons failure that correction exists to stop. "
+              "Decide which arm you are testing before you look at either."]
     return "\n".join(L) + "\n"
 
 

@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from . import db, legislators, scorecard
+from . import db, jurisdiction, scorecard
 from .config import CONFIG
 
 FRESH_DAYS = 15          # qualifier: the lag band that carried alpha
@@ -112,7 +112,7 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
             if amt >= BIG and r["sector"]:
                 covered = set()
                 for st in seats.get(bio.get(r["member"]) or "", []):
-                    covered.update(legislators.sectors_for_committee(st.get("name") or ""))
+                    covered.update(jurisdiction.sectors_for_seat(st))
                 if r["sector"] in covered:
                     reasons.append("their committee's sector")
 

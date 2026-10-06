@@ -73,6 +73,14 @@ _SPECIFIC = {
 }
 
 
+# Every sector name this project uses, which is exactly the set that can appear
+# in ticker_sectors.sector. Derived rather than typed out: the committee-hearing
+# tagger in topics.py is handed this as a closed enum, and a hearing tagged with a
+# sector no ticker can carry would silently never match a trade.
+VOCAB: tuple[str, ...] = tuple(sorted(
+    {name for _, _, name in _RANGES} | set(_SPECIFIC.values()) | {"Unclassified"}))
+
+
 def sector_for_sic(sic: str) -> str:
     sic = (sic or "").strip()
     if sic in _SPECIFIC:
@@ -94,6 +102,29 @@ def ticker_map(cfg: Config) -> dict[str, int]:
     r = requests.get(TICKERS_URL, timeout=TIMEOUT, headers={"User-Agent": user_agent(cfg)})
     r.raise_for_status()
     out = {row["ticker"].upper(): int(row["cik_str"]) for row in r.json().values()}
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(out))
+    return out
+
+
+def ticker_titles(cfg: Config) -> dict[str, str]:
+    """ticker -> registered company name, from the same SEC file, cached 30 days.
+
+    ticker_map() throws the title away because sector lookup only needs the CIK.
+    Ticker recovery needs the name: a symbol a model proposed is only accepted if
+    SEC's own name for it recognisably matches the asset text in the filing, and
+    that check is the entire difference between recovering AMD and inventing it.
+    """
+    cache = cfg.cache_dir / "sec_ticker_titles.json"
+    if cache.exists() and time.time() - cache.stat().st_mtime < 30 * 86400:
+        try:
+            return json.loads(cache.read_text())
+        except ValueError:
+            pass
+    r = requests.get(TICKERS_URL, timeout=TIMEOUT, headers={"User-Agent": user_agent(cfg)})
+    r.raise_for_status()
+    out = {row["ticker"].upper(): (row.get("title") or "")
+           for row in r.json().values()}
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(out))
     return out

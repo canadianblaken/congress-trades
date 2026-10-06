@@ -79,11 +79,26 @@ CACHE_TTL = 20 * 3600          # a trading day; closes never change retroactivel
 PAUSE = 0.25                   # Yahoo starts 429ing a few requests per second
 
 
+def yahoo_symbol(ticker: str) -> str:
+    """The symbol as Yahoo spells it.
+
+    Filings write class shares with a dot -- BRK.B, BF.B, HEI.A, MOG.A -- and the
+    chart endpoint 404s on every one of them; it wants BRK-B. Before this existed
+    the dot was only ever stripped when building the CACHE filename, so the miss
+    for BRK.B was written to the same file BRK-B would have read, and 74
+    disclosures across four class-share tickers sat unpriced behind a cached {}.
+    Normalising the request instead makes the shared filename correct rather than
+    a collision.
+    """
+    return ticker.strip().upper().replace(".", "-")
+
+
 def _cache_path(cfg, ticker: str):
     d = cfg.cache_dir / "prices"
     d.mkdir(parents=True, exist_ok=True)
-    # BRK.B and friends: keep the filename flat rather than a nested directory.
-    return d / f"{ticker.replace('/', '_').replace('.', '-')}.json"
+    # Flat filenames rather than a nested directory; yahoo_symbol has already
+    # folded the dotted spelling onto the hyphenated one, so this cannot collide.
+    return d / f"{yahoo_symbol(ticker).replace('/', '_')}.json"
 
 
 def series(ticker: str, cfg=CONFIG, force: bool = False) -> dict[str, float]:
@@ -93,7 +108,7 @@ def series(ticker: str, cfg=CONFIG, force: bool = False) -> dict[str, float]:
         return json.loads(path.read_text())
 
     try:
-        r = requests.get(CHART.format(sym=ticker), timeout=30,
+        r = requests.get(CHART.format(sym=yahoo_symbol(ticker)), timeout=30,
                          params={"range": "10y", "interval": "1d"},
                          headers={"User-Agent": user_agent(cfg)})
         if r.status_code == 404:
@@ -114,6 +129,22 @@ def series(ticker: str, cfg=CONFIG, force: bool = False) -> dict[str, float]:
 
     path.write_text(json.dumps(out, separators=(",", ":")))
     return out
+
+
+def cached(ticker: str, cfg=CONFIG) -> dict[str, float]:
+    """The cached closes for one ticker, or {} -- never a network call.
+
+    `series` refreshes anything older than a trading day, which is right for a
+    pipeline pass and wrong for a page load: the portal draws whatever the last
+    refresh left behind rather than making a reader wait on Yahoo."""
+    path = _cache_path(cfg, ticker)
+    if not path.exists():
+        return {}
+    try:
+        out = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+    return out if isinstance(out, dict) else {}
 
 
 def _close_at_or_after(s: dict[str, float], day: str, window: int = 7):

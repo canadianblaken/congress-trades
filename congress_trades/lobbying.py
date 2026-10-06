@@ -31,7 +31,7 @@ What it CANNOT support, and this module never implies otherwise:
     filing's income counted once per filing touching that issue -- never a
     per-issue dollar figure.
   - an official issue -> industry mapping. `ISSUE_SECTORS` below is an editorial
-    guess, exactly like `legislators.sectors_for_committee`, and exists to
+    guess, like the committee table in `jurisdiction.py`, and exists to
     prompt a look, not to assert a finding.
 """
 from __future__ import annotations

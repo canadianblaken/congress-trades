@@ -1,7 +1,7 @@
 """FEC campaign finance, cross-referenced with committee jurisdiction and trades.
 
 The project already knows, per member: which committees they sit on, which
-sectors those committees oversee (legislators.sectors_for_committee), and which
+sectors those committees oversee (jurisdiction.sectors_for_seat), and which
 sectors they've traded (ticker_sectors). What's missing is money -- does a
 member take PAC contributions from the industry their committee oversees, and
 also trade in it? That three-way overlap is the new signal here; nothing else
@@ -49,7 +49,8 @@ import requests
 
 from . import db
 from .config import CONFIG, user_agent
-from .legislators import _words, sectors_for_committee
+from . import jurisdiction
+from .legislators import _words
 
 BASE = "https://www.fec.gov/files/bulk-downloads"
 
@@ -338,8 +339,8 @@ def _member_jurisdiction(conn) -> dict[str, tuple[str, set]]:
     names = {r["bioguide"]: r["full_name"] for r in conn.execute(
         "SELECT DISTINCT bioguide, full_name FROM congress_members WHERE bioguide != ''")}
     out: dict[str, tuple[str, set]] = {}
-    for r in conn.execute("SELECT bioguide, name FROM member_committees"):
-        secs = sectors_for_committee(r["name"])
+    for r in conn.execute("SELECT bioguide, key FROM member_committees"):
+        secs = jurisdiction.sectors_for_seat(dict(r))
         nm = names.get(r["bioguide"])
         if not secs or nm is None:
             continue
@@ -498,7 +499,7 @@ def to_markdown(d: dict) -> str:
          "chamber or district didn't line up exactly with the roster -- most likely "
          "redistricting between cycles, not a bug.", "",
          f"{d['members_with_jurisdiction']} members have a committee seat whose "
-         f"jurisdiction maps to a sector (legislators.sectors_for_committee). Of "
+         f"jurisdiction maps to a sector (jurisdiction.sectors_for_seat). Of "
          f"those, {d['members_with_pac_in_jurisdiction']} took PAC money from a "
          f"committee this module's keyword heuristic labels as that same sector, "
          f"and {d['members_trading_in_jurisdiction']} traded a stock in it. "

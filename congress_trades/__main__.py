@@ -12,9 +12,10 @@ import json
 import logging
 import sys
 
-from . import (advise, alerts, annual, assets, backtest, committees,
-               compliance, db, digest, finance, judiciary, lag, lobbying,
-               pipeline, prices, scorecard)
+from . import (advise, alerts, annual, assets, backtest, collect, committees,
+               compliance, db, digest, finance, judiciary, jurisdiction, lag,
+               llm, lobbying, parserqa, pipeline, prices, resolve, scorecard,
+               topics)
 from .config import CONFIG
 from .publish import render
 
@@ -104,11 +105,62 @@ def main(argv=None) -> int:
                    help="rewrite the committed snapshot from the database")
     p.add_argument("--quiet", action="store_true")
 
+    p = sub.add_parser("llm", help="check the configured model: reachable, and "
+                       "can it honour a JSON schema?")
+    p.add_argument("--selftest", action="store_true",
+                   help="shape checks only, calling no model")
+
+    p = sub.add_parser("topics", help="what each committee meeting was about: fetch "
+                       "the titles, then tag them by industry with a model")
+    p.add_argument("--stage", choices=("fetch", "tag", "both"), default="both",
+                   help="'fetch' needs CONGRESS_API_KEY; 'tag' needs a model")
+    p.add_argument("--since", default="",
+                   help="only fetch titles for meetings on or after this ISO date "
+                        "— the full back catalogue is roughly two hours")
+    p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--refresh", action="store_true", help="re-tag titles already stored")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("jurisdiction", help="which industries each committee "
+                       "oversees: a table generated once by a model and "
+                       "committed as data")
+    p.add_argument("--generate", action="store_true",
+                   help="ask a model about every committee on the roster and "
+                        "diff the answer against the committed table")
+    p.add_argument("--write", action="store_true",
+                   help="commit what --generate proposed to "
+                        "seed/committee_sectors.json, calling no model again")
+    p.add_argument("--limit", type=int, default=0)
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("parser-qa", help="does the House parser still read the "
+                       "filings? An exact scan of every cached text, then a "
+                       "sampled model audit")
+    p.add_argument("--scan", action="store_true",
+                   help="the exact pass only: compare transaction headers found "
+                        "against rows returned, calling no model")
+    p.add_argument("--sample", type=int, default=25,
+                   help="how many cached filings to ask a model about (0 = all)")
+    p.add_argument("--doc", default="", help="audit one filing by DocID")
+    p.add_argument("--seed", type=int, default=0,
+                   help="the sample is deterministic, so a finding can be reproduced")
+    p.add_argument("--refresh", action="store_true",
+                   help="re-audit filings this model has already seen")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
     p = sub.add_parser("timing", help="do members trade around their own hearings?")
     p.add_argument("--floor", type=int, default=1)
     p.add_argument("--window", type=int, default=30)
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
+    p.add_argument("--sector-matched", action="store_true",
+                   help="count only meetings whose subject touches the industry "
+                        "traded (needs `topics`); the narrower, more meaningful arm")
 
     p = sub.add_parser("alerts", help="only what crossed a bar since last run")
     p.add_argument("--days", type=int, default=14)
@@ -170,10 +222,33 @@ def main(argv=None) -> int:
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
-    p = sub.add_parser("advise", help="send the digest to any OpenAI-compatible LLM")
+    p = sub.add_parser("resolve", help="label the untickered assets with a model, "
+                       "and recover the tickers it gets right")
+    p.add_argument("--scope", choices=("unlabelled", "all"), default="unlabelled",
+                   help="'unlabelled' asks only about names no pattern could place; "
+                        "'all' re-asks about every untickered name, to check the "
+                        "model against the patterns")
+    p.add_argument("--limit", type=int, default=0, help="stop after N names")
+    p.add_argument("--dry-run", action="store_true", help="show the proposals, write nothing")
+    p.add_argument("--apply", action="store_true",
+                   help="also write verified tickers into the trades table")
+    p.add_argument("--refresh", action="store_true", help="re-ask about names already stored")
+    p.add_argument("--reverify", action="store_true",
+                   help="re-run the gates over proposals already stored, calling "
+                        "no model — use after the verification rules change")
+    p.add_argument("--quiet", action="store_true")
+    p.add_argument("--selftest", action="store_true")
+
+    p = sub.add_parser("advise", help="send the digest to a model (see CONGRESS_LLM_PROVIDER)")
     p.add_argument("--days", type=int, default=90)
     p.add_argument("--floor", type=int, default=CONFIG.default_floor)
     p.add_argument("--dry-run", action="store_true", help="print the prompt, call nothing")
+    p.add_argument("--check", action="store_true",
+                   help="audit the reply against the digest afterwards: symbols "
+                        "and figures it invented, and claims the data does not "
+                        "support")
+    p.add_argument("--selftest", action="store_true",
+                   help="shape checks only, calling no model")
 
     sub.add_parser("publish", help="render the self-contained HTML page")
 
@@ -253,11 +328,24 @@ def main(argv=None) -> int:
         if args.seed:
             return committees.seed(CONFIG, force=True, quiet=args.quiet)
         return committees.collect(CONFIG, quiet=args.quiet)
+    if args.cmd == "jurisdiction":
+        if args.selftest:
+            jurisdiction.selftest(CONFIG)
+            return 0
+        return jurisdiction.run(CONFIG, args.generate, args.write, args.limit,
+                                args.quiet)
+    if args.cmd == "parser-qa":
+        if args.selftest:
+            parserqa.selftest(CONFIG)
+            return 0
+        return parserqa.run(CONFIG, args.scan, args.sample, args.doc, args.seed,
+                            args.refresh, args.dry_run, args.quiet)
     if args.cmd == "timing":
         if args.selftest:
             committees.selftest(CONFIG)
             return 0
-        d = committees.build(args.floor, args.window, CONFIG)
+        d = committees.build(args.floor, args.window, CONFIG,
+                             args.sector_matched)
         if args.json:
             print(json.dumps(d, indent=2, default=str))
         else:
@@ -355,8 +443,32 @@ def main(argv=None) -> int:
         else:
             sys.stdout.write(assets.to_markdown(d))
         return 0
+    if args.cmd == "llm":
+        if args.selftest:
+            llm.selftest()
+            return 0
+        return llm.check()
+    if args.cmd == "topics":
+        if args.selftest:
+            topics.selftest(CONFIG)
+            return 0
+        return topics.run(CONFIG, args.stage, args.since, args.limit,
+                          args.refresh, args.dry_run, args.quiet)
+    if args.cmd == "resolve":
+        if args.selftest:
+            resolve.selftest(CONFIG)
+            llm.selftest()
+            return 0
+        if args.reverify:
+            return resolve.reverify(CONFIG, args.apply, args.dry_run, args.quiet)
+        return resolve.run(CONFIG, args.scope, args.limit, args.dry_run,
+                           args.apply, args.refresh, args.quiet)
     if args.cmd == "advise":
-        return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG)
+        if args.selftest:
+            advise.selftest()
+            return 0
+        return advise.run(args.days, args.floor, args.dry_run, cfg=CONFIG,
+                          check=args.check)
     if args.cmd == "publish":
         return render(CONFIG)
     if args.cmd == "all":
@@ -373,4 +485,10 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        rc = main()
+    except collect.MissingTool as e:
+        # A traceback would bury the one line that tells you what to install.
+        print(f"error: {e}", file=sys.stderr)
+        rc = 2
+    raise SystemExit(rc)
