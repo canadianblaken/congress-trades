@@ -248,9 +248,13 @@ def to_text(alerts: list[dict], days: int = 14) -> str:
 
 def feed(limit: int = 100, cfg=CONFIG) -> list[dict]:
     """The most recently recorded alerts, newest first."""
+    import os
+    hide = os.environ.get("CONGRESS_HIDE_WATCHLIST") == "1"
     with db.connect(cfg.db_path) as conn:
-        return [dict(r) for r in conn.execute(
-            "SELECT * FROM alert_log ORDER BY at DESC, fp LIMIT ?", (limit,))]
+        rows = [dict(r) for r in conn.execute(
+            "SELECT * FROM alert_log ORDER BY at DESC, fp LIMIT ?", (limit * 3 if hide else limit,))]
+    # A read-only portal must not reveal what you watch (your holdings, often).
+    return [r for r in rows if not (hide and "watched" in (r.get("why") or ""))][:limit]
 
 
 def to_rss(items: list[dict], link: str = "") -> str:

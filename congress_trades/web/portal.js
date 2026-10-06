@@ -7,9 +7,10 @@ let facets={members:[],tickers:[]};
 // --- routing ---------------------------------------------------------------
 // [hash, label, what the tab is for]. Descriptions come from the server: TABS for
 // the fixed tabs, each report's own blurb for the rest.
+// A read-only portal (shared with others) has no watchlist and no Maintenance.
 const routes=()=>[...['','trends','explore','watch','page'].map(h=>[h,TABS[h].title,TABS[h].blurb]),
   ...Object.entries(REPORTS).map(([k,v])=>['r/'+k,v.title,v.blurb]),
-  ['jobs',TABS.jobs.title,TABS.jobs.blurb]];
+  ['jobs',TABS.jobs.title,TABS.jobs.blurb]].filter(([h])=>!READ_ONLY||!['watch','jobs'].includes(h));
 function nav(){
   const cur=location.hash.replace(/^#\//,'');
   $('#nav').innerHTML=routes().map(([h,t,b])=>
@@ -23,9 +24,9 @@ async function route(){
   const cur=location.hash.replace(/^#\//,'');
   if(cur==='trends') return trends();
   if(cur==='explore') return explore();
-  if(cur==='watch') return watchPage();
+  if(cur==='watch'&&!READ_ONLY) return watchPage();
   if(cur==='page') return full();
-  if(cur==='jobs') return jobs();
+  if(cur==='jobs'&&!READ_ONLY) return jobs();
   if(cur.startsWith('r/')) return report(cur.slice(2));
   return overview();
 }
@@ -133,8 +134,8 @@ async function explore(){
     <div><label>until</label><input id="f-until" placeholder="2025-12-31" value="${esc(st.until)}"></div>
     <div class="chk"><input type="checkbox" id="f-tickered"${st.tickered==='1'?' checked':''}>
       <label style="margin:0;text-transform:none;font-size:13px">tickered only</label></div>
-    <div class="chk"><input type="checkbox" id="f-watched"${st.watched==='1'?' checked':''}>
-      <label style="margin:0;text-transform:none;font-size:13px">watched only</label></div>
+    ${READ_ONLY?'':`<div class="chk"><input type="checkbox" id="f-watched"${st.watched==='1'?' checked':''}>
+      <label style="margin:0;text-transform:none;font-size:13px">watched only</label></div>`}
   </div><div id="rows"><div class="spin">loading...</div></div>`;
 
   const bind=(id,key,ev)=>{const el=$(id); if(!el) return;
@@ -683,6 +684,7 @@ async function watchSet(kind,value,on){
 }
 async function watchButton(b){
   if(!b) return;
+  if(READ_ONLY){ b.remove(); return; }
   if(!WATCH) await loadWatch();
   const draw=()=>{ const on=watching(b.dataset.kind,b.dataset.value);
     b.textContent=on?'unwatch':'watch'; b.setAttribute('aria-pressed',on); };
@@ -933,4 +935,6 @@ $('#st').onclick=async()=>{
   $('#live').textContent='portal stopped - restart with ./run.sh portal';
 };
 
+// Hidden rather than removed: tick() and the handlers above still address them.
+if(READ_ONLY) ['#rf','#st'].forEach(s=>$(s).hidden=true);
 statline(); route(); tick();

@@ -597,6 +597,21 @@ end is ordinary files in `congress_trades/web/`: `portal.*` for this app,
 `page.*` for the static page `publish` writes, and `common.js` for the helpers
 both use. `./run.sh test` runs every test and module selftest.
 
+### Sharing it read-only
+
+```bash
+./run.sh portal --read-only --port 8780          # beside your own on 8777
+./run.sh portal stop --port 8780
+```
+
+A read-only portal refuses every write (refresh, jobs, stop, the model form,
+watchlist changes) and hides your setup: no Maintenance tab, no model settings,
+no live model check, and no watchlist -- not in the API, and not in the reports
+or the alerts feed either, since a watchlist of what you hold is personal. Each
+port keeps its own pid file, so the two portals start and stop independently.
+It still binds to `127.0.0.1`; to share it, put that port behind Tailscale as
+below, or behind a reverse proxy you control.
+
 ### Reading it from your phone
 
 The portal binds to `127.0.0.1` only, deliberately: it has no login, and its

@@ -15,13 +15,18 @@ from urllib.parse import urlparse
 
 from ..config import CONFIG
 from .api import api_facets, api_member, api_names, api_ticker, api_timeline, api_top, api_trades, api_watch, stats, watch_set
-from .jobs import JOBS, PIDFILE, REPORTS, _prereq, _refresh, _report_args, _run, start_job, start_refresh
+from .jobs import JOBS, MODE, REPORTS, pidfile, _prereq, _refresh, _report_args, _run, start_job, start_refresh
 from .models import PRESETS, model_current, model_list, model_save
-from .pages import APP, STATIC, WEB, jobs_page, md_to_html, overview, report_page, shell
+from .pages import STATIC, WEB, app_html, jobs_page, md_to_html, overview, report_page, shell
 
 HOST = "127.0.0.1"
 PORT = 8777
 # --- HTTP --------------------------------------------------------------------
+
+# What a read-only portal will not show: the jobs, your model setup, a live model
+# call, and your watchlist.
+READ_ONLY_HIDDEN = {"/jobs", "/api/jobs", "/api/model", "/api/llm", "/api/watch"}
+
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "congress-portal"
@@ -71,6 +76,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         u = urlparse(self.path)
         path, q = u.path, parse_qs(u.query)
+        if MODE["read_only"]:
+            self._json({"error": "this portal is read-only"}, 403)
+            return
         if path == "/api/watch":
             if not self._same_origin():
                 self._json({"error": "refused: not from this portal's page"}, 403)
@@ -137,6 +145,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         u = urlparse(self.path)
         path, q = u.path, parse_qs(u.query)
+        if MODE["read_only"] and path in READ_ONLY_HIDDEN:
+            self._json({"error": "not available on a read-only portal"}, 404)
+            return
 
         if path.startswith("/static/") and path[8:] in STATIC:
             self._send((WEB / path[8:]).read_bytes(), STATIC[path[8:]])
@@ -212,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if path == "/":
-            self._send(APP)
+            self._send(app_html())
             return
         if path == "/page":
             f = CONFIG.out_html
@@ -272,10 +283,11 @@ def stop_refresh() -> None:
         pass
 
 
-def stop(quiet: bool = False) -> int:
-    """Signal a running portal, identified by the pid file."""
+def stop(quiet: bool = False, port: int = PORT) -> int:
+    """Signal a running portal, identified by its port's pid file."""
     import os
     import signal
+    PIDFILE = pidfile(port)
     if not PIDFILE.exists():
         if not quiet:
             print("no portal is running (no pid file)")
@@ -306,7 +318,15 @@ def stop(quiet: bool = False) -> int:
     return 1
 
 
-def serve(host: str = HOST, port: int = PORT) -> int:
+def serve(host: str = HOST, port: int = PORT, read_only: bool = False) -> int:
+    """read_only refuses every write and hides your setup and watchlist, for
+    sharing: no refresh, jobs, stop, model form or watchlist, in the server and the
+    page alike, and the watchlist is hidden from reports and the feed too."""
+    import os
+    PIDFILE = pidfile(port)
+    MODE["read_only"] = read_only
+    if read_only:
+        os.environ["CONGRESS_HIDE_WATCHLIST"] = "1"     # this process and every report
     try:
         httpd = ThreadingHTTPServer((host, port), Handler)
     except OSError as e:
@@ -321,7 +341,7 @@ def serve(host: str = HOST, port: int = PORT) -> int:
     except OSError:
         pass
     s = stats()
-    print(f"portal: http://{host}:{port}")
+    print(f"portal: http://{host}:{port}" + ("  (read-only)" if read_only else ""))
     if s and "error" not in s:
         print(f"  {s.get('trades', 0):,} trades, {s.get('members', 0):,} members, "
               f"{s.get('priced', 0):,} priced")
@@ -348,9 +368,7 @@ def serve(host: str = HOST, port: int = PORT) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] in ("stop", "--stop"):
-        return stop()
-    host, port = HOST, PORT
+    host, port, read_only = HOST, PORT, "--read-only" in argv
     for i, a in enumerate(argv):
         if a == "--port" and i + 1 < len(argv):
             port = int(argv[i + 1])
@@ -360,7 +378,9 @@ def main(argv: list[str] | None = None) -> int:
             host = argv[i + 1]
         elif a.startswith("--host="):
             host = a.split("=", 1)[1]
-    return serve(host, port)
+    if argv and argv[0] in ("stop", "--stop"):
+        return stop(port=port)
+    return serve(host, port, read_only)
 
 
 

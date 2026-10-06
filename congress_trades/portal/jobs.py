@@ -108,7 +108,14 @@ JOBS: dict[str, dict] = {
 }
 
 # Written on start, removed on exit, so `portal stop` knows what to signal.
-PIDFILE = Path(__file__).resolve().parents[2] / ".portal.pid"
+# Shared mode. server.serve sets it; pages reads it to leave out what read-only refuses.
+MODE = {"read_only": False}
+
+
+def pidfile(port: int) -> Path:
+    """One per port, so a read-only portal can run beside your own."""
+    root = Path(__file__).resolve().parents[2]
+    return root / (".portal.pid" if port == 8777 else f".portal-{port}.pid")
 
 # Long-running collection state, shared across request threads.
 _refresh = {"running": False, "started": 0.0, "line": "", "rc": None, "finished": 0.0,

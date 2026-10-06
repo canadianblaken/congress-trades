@@ -13,6 +13,7 @@ has been checked against SEC registration and a real price series, so what lands
 in the trades table is a verified fact rather than a suggestion."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -403,7 +404,11 @@ def connect(db_path: Path):
 
 # ---------------------------------------------------------------- watchlist
 def watchlist(conn: sqlite3.Connection) -> dict[str, set[str]]:
+    """Every consumer reads the watchlist through here, so a read-only portal
+    hides it everywhere -- reports, alerts, digest -- by setting one variable."""
     out: dict[str, set[str]] = {"member": set(), "ticker": set()}
+    if os.environ.get("CONGRESS_HIDE_WATCHLIST") == "1":
+        return out
     try:
         for kind, value in conn.execute("SELECT kind, value FROM watchlist"):
             out[kind].add(value)

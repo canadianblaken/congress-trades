@@ -85,5 +85,27 @@ assert post("/api/watch", headers={"Origin": "https://evil.example"})[0] == 403
 code, d = post("/job/nonesuch")
 assert code == 409 and not d["started"], (code, d)
 
+# Read-only mode: every write refused, setup and watchlist hidden, page told.
+import os  # noqa: E402
+from congress_trades.portal import jobs, pages  # noqa: E402
+jobs.MODE["read_only"], os.environ["CONGRESS_HIDE_WATCHLIST"] = True, "1"
+try:
+    for p in ("/refresh", "/job/refresh", "/shutdown", "/api/watch", "/api/model"):
+        assert post(p)[0] == 403, p
+    for p in sorted(server.READ_ONLY_HIDDEN):
+        try:
+            get(p)
+        except urllib.error.HTTPError as e:
+            assert e.code == 404, (p, e.code)
+        else:
+            raise AssertionError(f"{p} should be hidden when read-only")
+    assert b"READ_ONLY=true" in pages.app_html()
+    assert get("/r/digest")[0] == 200 and get("/api/stats")[0] == 200
+finally:
+    jobs.MODE["read_only"] = False
+    os.environ.pop("CONGRESS_HIDE_WATCHLIST", None)
+assert b"READ_ONLY=false" in pages.app_html()
+
 httpd.shutdown()
-print(f"ok: {len(PAGES)} pages and {len(APIS)} API routes answer; static, origin and job guards refuse")
+print(f"ok: {len(PAGES)} pages and {len(APIS)} API routes answer; static, origin, job "
+      "and read-only guards refuse")

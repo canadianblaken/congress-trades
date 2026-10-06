@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ..config import CONFIG
 from .api import stats
-from .jobs import JOBS, REPORTS, _prereq, _refresh, _report_args, _run
+from .jobs import JOBS, MODE, REPORTS, _prereq, _refresh, _report_args, _run
 
 # --- the smallest markdown renderer that reads these reports correctly -------
 
@@ -170,7 +170,8 @@ def shell(title: str, body: str, current: str = "") -> bytes:
            _tab("/page", *TABS["page"], current == "page")]
     nav += [_tab(f"/r/{key}", spec["title"], spec["blurb"], current == key)
             for key, spec in REPORTS.items()]
-    nav.append(_tab("/jobs", *TABS["jobs"], current == "jobs"))
+    if not MODE["read_only"]:
+        nav.append(_tab("/jobs", *TABS["jobs"], current == "jobs"))
     running = _refresh["running"]
     verb = JOBS.get(_refresh["job"], {}).get("verb", "Running")
     bar = (f'<div class="bar"><button id="rf"{" disabled" if running else ""}>'
@@ -306,14 +307,22 @@ def report_page(name: str, q: dict) -> str:
 # filter over a baked payload, so nothing here goes stale between refreshes and
 # the whole database stays reachable without reloading.
 
-APP = (WEB / "portal.html").read_text(encoding="utf-8").replace(
-    "__REPORTS__", json.dumps({k: {"title": v["title"], "blurb": v["blurb"],
-                                   "args": {a: t.__name__ for a, t in v["args"].items()},
-                                   "defaults": {a: str(d) for a, d in
-                                                v.get("defaults", {}).items()}}
-                               for k, v in REPORTS.items()})).replace(
-    "__TABS__", json.dumps({k: {"title": t, "blurb": b} for k, (t, b) in TABS.items()})
-).encode("utf-8")
+_app: dict[bool, bytes] = {}
+
+
+def app_html() -> bytes:
+    """The app shell, with the report and tab tables and the mode baked in."""
+    ro = MODE["read_only"]
+    if ro not in _app:
+        _app[ro] = (WEB / "portal.html").read_text(encoding="utf-8").replace(
+            "__REPORTS__", json.dumps({k: {"title": v["title"], "blurb": v["blurb"],
+                                           "args": {a: t.__name__ for a, t in v["args"].items()},
+                                           "defaults": {a: str(d) for a, d in
+                                                        v.get("defaults", {}).items()}}
+                                       for k, v in REPORTS.items()})).replace(
+            "__TABS__", json.dumps({k: {"title": t, "blurb": b} for k, (t, b) in TABS.items()})
+        ).replace("__READ_ONLY__", json.dumps(ro)).encode("utf-8")
+    return _app[ro]
 # Served at /static/<name>. A fixed list, so a URL can never name another file.
 STATIC = {"portal.css": "text/css; charset=utf-8",
           "portal.js": "text/javascript; charset=utf-8",
