@@ -536,6 +536,30 @@ byte-identical to what the CLI prints, and a crash in one report cannot take the
 server down. Every report's options are declared in a table in `portal.py`;
 nothing else from a URL is ever passed through to a subprocess.
 
+### Reading it from your phone
+
+The portal binds to `127.0.0.1` only, deliberately: it has no login, and its
+Maintenance tab starts jobs. To read it from your own devices, put it behind a
+private network rather than opening a port. With Tailscale:
+
+```bash
+tailscale serve --bg --https=8777 8777   # https://<this-machine>.<tailnet>.ts.net:8777/
+tailscale serve status
+tailscale serve --https=8777 off         # stop serving just this one
+```
+
+Give it its own port as above. A bare `tailscale serve --bg 8777` takes the
+root of port 443, replacing anything that machine already serves there, and
+`tailscale serve reset` clears every mapping, not just this one. A sub-path
+(`--set-path`) does not work either: the portal's links and API calls are
+absolute.
+
+Everything reads normally that way. The model form will refuse to save or list
+models, because it only accepts requests addressed to `127.0.0.1` or
+`localhost`. That's the guard that keeps another site from redirecting your API
+key, so change models at the machine itself. Anyone on your tailnet can reach
+the jobs and the Stop button, so do not share the node.
+
 ### Maintenance, from the page
 
 The **Maintenance** tab runs the jobs that write, so the model-backed work does
@@ -1023,7 +1047,10 @@ All via environment variables; every one has a working default except the first.
 | `CONGRESS_OLLAMA_THINK` | `0` | leave off for labelling work |
 | `CONGRESS_OLLAMA_KEEP_ALIVE` | `5m` | how long Ollama holds the model in memory |
 
-A `.env` beside the README supplies any of these — copy `.env.example`. It is read
+A `.env` beside the README supplies any of these — copy `.env.example`.
+It can hold API keys (the portal's model form writes them there, mode 600), so
+keep it out of anything that syncs or backs up to a shared place, and never
+commit it — it is in `.gitignore` for that reason. It is read
 by `run.sh` and by `python -m congress_trades` alike, and a variable already
 exported in your shell always wins over the file, so you can override it for a
 single run.
