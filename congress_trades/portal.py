@@ -411,7 +411,8 @@ CSS = """
 :root { color-scheme:dark;
   --bg:#0e1116; --panel:#12161c; --line:#222831; --line-2:#2a3038;
   --ink:#d6dae0; --ink-2:#9aa4b2; --ink-3:#6b7480; --white:#fff;
-  --pos:#3987e5; --neg:#e66767; --link:#6cb6ff; }
+  --pos:#3987e5; --neg:#e66767; --link:#6cb6ff;
+  --dem:#4f9dff; --rep:#ff5c5c; }
 * { box-sizing:border-box; }
 body { background:var(--bg); color:var(--ink); margin:0 auto; max-width:1240px;
   font:15px/1.55 -apple-system,Segoe UI,Roboto,sans-serif; padding:1.6rem 1.2rem 4rem; }
@@ -831,7 +832,8 @@ def api_ticker(sym: str, q: dict) -> dict:
                 WHERE t.ticker = ? GROUP BY t.member ORDER BY n DESC LIMIT 15""",
             (sym,)).fetchall()]
         recent = [dict(r) for r in conn.execute(
-            """SELECT t.member, COALESCE(m.full_name,'') full_name, t.tx_type, t.tx_date,
+            """SELECT t.member, COALESCE(m.full_name,'') full_name, COALESCE(m.party,'') party,
+                      t.tx_type, t.tx_date,
                       t.disclosed, t.amount_range, t.doc_url, r.ret_90, r.bench_90
                  FROM congress_trades t LEFT JOIN congress_members m ON m.member = t.member
                  LEFT JOIN trade_returns r ON r.trade_id = t.id
@@ -1347,6 +1349,8 @@ th.s[data-on]:after { content:attr(data-on); color:var(--link); margin-left:.25r
 .pager { display:flex; gap:.6rem; align-items:center; margin:.8rem 0; font-size:13px;
   color:var(--ink-2); }
 .mlink { cursor:pointer; color:var(--link); }
+.pD,.mlink.pD { color:var(--dem); } .pR,.mlink.pR { color:var(--rep); }
+.pI,.mlink.pI { color:var(--white); }
 .panel { position:fixed; inset:0 0 0 auto; width:min(540px,94vw); background:var(--panel);
   border-left:1px solid var(--line-2); padding:1.2rem; overflow-y:auto; z-index:9;
   box-shadow:-18px 0 40px rgba(0,0,0,.45); }
@@ -1447,15 +1451,7 @@ async function drawActivity(){
     options:{maintainAspectRatio:false,responsive:true,
       interaction:{mode:'index',intersect:false},
       // The tooltip shows both lines; a click opens whichever is nearer the cursor.
-      onHover:(e,els)=>{e.native.target.style.cursor=els.length?'pointer':'default';},
-      onClick:(e,els,chart)=>{
-        const hit=chart.getElementsAtEventForMode(e,'nearest',{intersect:false,axis:'xy'},true)[0];
-        if(!hit) return;
-        const ym=r[hit.index].ym;
-        Object.assign(st,{q:'',member:'',ticker:'',chamber:'',floor:'',tickered:'0',
-          type:hit.datasetIndex?'sell':'buy',since:[ym+'-01',d.since||''].sort()[1],until:ym+'-31',
-          sort:'date',dir:'desc',offset:0});
-        if(location.hash!=='#/explore') location.hash='#/explore'; else explore();},
+      ...clickMonth(r,d.since),
       plugins:{legend:{display:true,position:'top',align:'end',
           labels:{boxWidth:9,boxHeight:9,usePointStyle:true,pointStyle:'line',padding:14}},
         tooltip:Object.assign({},tip,{callbacks:{
@@ -1464,6 +1460,24 @@ async function drawActivity(){
       scales:{x:axis({grid:{display:false}}),
         y:axis({beginAtZero:true,ticks:{color:C.faint,padding:6,
           callback:v=>v.toLocaleString()}})}}});
+}
+
+// A member's name in their party's colour; '' leaves an unknown party as it was.
+const pc=p=>({D:'pD',R:'pR',I:'pI'})[(p||'')[0]]||'';
+
+// Both timelines open the explorer on one month and direction. `since` is the
+// window's own cut, because the first month plotted is usually partial.
+function openMonth(ym,sell,since,extra){
+  Object.assign(st,{q:'',member:'',ticker:'',chamber:'',floor:'',tickered:'0',
+    type:sell?'sell':'buy',since:[ym+'-01',since||''].sort()[1],until:ym+'-31',
+    sort:'date',dir:'desc',offset:0},extra||{});
+  if(location.hash!=='#/explore') location.hash='#/explore'; else explore();
+}
+function clickMonth(r,since,extra){ return {
+  onHover:(e,els)=>{e.native.target.style.cursor=els.length?'pointer':'default';},
+  onClick:(e,els,chart)=>{
+    const hit=chart.getElementsAtEventForMode(e,'nearest',{intersect:false,axis:'xy'},true)[0];
+    if(hit) openMonth(r[hit.index].ym,hit.datasetIndex===1,since,extra);}};
 }
 
 // --- explorer --------------------------------------------------------------
@@ -1516,7 +1530,7 @@ async function rows(){
     st.dir==='asc'?'^':'v'}"`:''}>${l}</th>`:`<th>${l}</th>`).join('');
   const body=d.rows.map(r=>`<tr>
     <td class="num">${esc(r.disclosed||r.tx_date||'')}</td>
-    <td><span class="mlink" data-m="${esc(r.member)}">${esc(r.full_name||r.member)}</span>${
+    <td><span class="mlink ${pc(r.party)}" data-m="${esc(r.member)}">${esc(r.full_name||r.member)}</span>${
       r.party?` <span class="note">${esc(r.party[0])}</span>`:''}</td>
     <td>${r.ticker?`<b class="mlink" data-t="${esc(r.ticker)}">${esc(r.ticker)}</b>`
       :'<span class="note">-</span>'}</td>
@@ -1622,7 +1636,7 @@ async function member(name){
   el.className='panel';
   el.innerHTML=`<button class="x" id="closep">close</button>
     ${d.wiki_thumb?`<img src="${esc(d.wiki_thumb)}" alt="">`:''}
-    <h2>${esc(d.full_name||name)}</h2>
+    <h2 class="${pc(d.party)}">${esc(d.full_name||name)}</h2>
     <p class="note">${esc([d.party,d.chamber,d.state,d.district?'district '+d.district:''].filter(Boolean).join(' - '))}</p>
     ${d.wiki_desc?`<p>${esc(d.wiki_desc)}</p>`:''}
     <div class="kv">
@@ -1905,12 +1919,14 @@ async function drawTime(){
           borderSkipped:'start',categoryPercentage:.78,barPercentage:.92}]},
     options:{maintainAspectRatio:false,responsive:true,
       interaction:{mode:'index',intersect:false},
+      ...clickMonth(r,d.since,{chamber:tstate.chamber,floor:tstate.floor}),
       plugins:{legend:{display:true,position:'top',align:'end',
           labels:{boxWidth:9,boxHeight:9,usePointStyle:true,pointStyle:'rect',padding:14}},
         tooltip:Object.assign({},tip,{callbacks:{
           label:c=>`${c.dataset.label}: ${dollars?money(c.parsed.y):c.parsed.y.toLocaleString()}`,
           afterBody:i=>{const x=r[i[0].dataIndex];
-            return [`${x.members} members active`];}}})},
+            return [`${x.members} members active`];},
+          footer:()=>'click a bar to list them'}})},
       scales:{x:axis({grid:{display:false}}),
         y:axis({ticks:{color:C.faint,padding:6,
           callback:v=>dollars?money(v):v.toLocaleString()}})}}});
@@ -1951,7 +1967,7 @@ async function tickerPanel(sym){
     <h3>Who traded it</h3>
     <div class="tbl-scroll"><table><thead><tr><th>member</th><th>buys</th><th>sells</th>
       <th>net</th></tr></thead><tbody>${d.members.map(m=>`<tr>
-      <td><span class="mlink" data-m="${esc(m.member)}">${esc(m.full_name||m.member)}</span></td>
+      <td><span class="mlink ${pc(m.party)}" data-m="${esc(m.member)}">${esc(m.full_name||m.member)}</span></td>
       <td class="num">${m.buys}</td><td class="num">${m.sells}</td>
       <td class="num ${m.net>0?'pos':m.net<0?'neg':''}">${money(m.net)}</td></tr>`).join('')}
       </tbody></table></div>
@@ -1959,7 +1975,7 @@ async function tickerPanel(sym){
     <div class="tbl-scroll"><table><thead><tr><th>disclosed</th><th>member</th><th>type</th>
       <th>amount</th><th>alpha</th></tr></thead><tbody>${d.recent.map(r=>`<tr>
       <td class="num">${esc(r.disclosed||r.tx_date||'')}</td>
-      <td>${esc((r.full_name||r.member||'').slice(0,22))}</td>
+      <td class="${pc(r.party)}">${esc((r.full_name||r.member||'').slice(0,22))}</td>
       <td class="${/^s/i.test(r.tx_type||'')?'neg':'pos'}">${esc(r.tx_type||'')}</td>
       <td class="num">${esc(r.amount_range||'')}</td>
       <td class="${cls(r.alpha)}">${pct(r.alpha)}</td></tr>`).join('')}</tbody></table></div>
