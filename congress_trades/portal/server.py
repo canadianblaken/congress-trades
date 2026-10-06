@@ -53,14 +53,29 @@ class Handler(BaseHTTPRequestHandler):
                    "application/json; charset=utf-8", code)
 
     def _same_origin(self) -> bool:
-        """Only this portal's own page may change the model. Without this, any
-        website open in the same browser could POST here -- or reach it through a
-        rebound DNS name -- and point your API key at a server of its choosing."""
-        port = self.server.server_address[1]
-        hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+        """Only this portal's own page may change the model or the watchlist.
+
+        Two attacks to stop. A rebound DNS name -- an attacker's domain pointed at
+        this machine -- arrives with the attacker's name in Host, so Host must be
+        an address or one of this machine's own names. A page on another site
+        posts with its own Origin, so Origin must match Host. The JSON content
+        type forces a browser preflight, which this server never answers.
+
+        Any IP literal is accepted, so another computer on your network can use
+        the portal by address (http://192.168.x.x:8777) when it is bound there."""
+        import ipaddress
+        import socket
+        host = self.headers.get("Host") or ""
+        name = host.rsplit(":", 1)[0].strip("[]").lower()
+        me = socket.gethostname().lower()
+        try:
+            ipaddress.ip_address(name)
+            ok_host = True
+        except ValueError:
+            ok_host = name in ("localhost", me, f"{me}.local", f"{me}.lan")
         origin = self.headers.get("Origin")
-        return (self.headers.get("Host") in hosts
-                and (origin is None or origin.removeprefix("http://") in hosts)
+        return (ok_host
+                and (origin is None or origin.split("://", 1)[-1] == host)
                 and (self.headers.get("Content-Type") or "").startswith("application/json"))
 
     def _body(self) -> dict:

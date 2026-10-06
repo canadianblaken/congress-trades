@@ -90,6 +90,14 @@ for p in ("/static/page.js", "/static/../config.py", "/static/"):
 assert post("/api/models", headers={"Origin": "https://evil.example"})[0] == 403
 assert post("/api/model", headers={"Content-Type": "text/plain"})[0] == 403
 assert post("/api/watch", headers={"Origin": "https://evil.example"})[0] == 403
+# Another computer on the network, by address, gets past the guard (an empty body
+# then fails validation with 400, so nothing is written); a rebound name or a
+# foreign Origin still does not.
+_lan = {"Host": f"192.168.1.5:{httpd.server_address[1]}"}
+assert post("/api/watch", headers=_lan)[0] == 400
+assert post("/api/watch", headers={**_lan, "Origin": f"http://{_lan['Host']}"})[0] == 400
+assert post("/api/watch", headers={**_lan, "Origin": "http://evil.example"})[0] == 403
+assert post("/api/watch", headers={"Host": f"evil.example:{httpd.server_address[1]}"})[0] == 403
 # An unknown job is refused, not started.
 code, d = post("/job/nonesuch")
 assert code == 409 and not d["started"], (code, d)

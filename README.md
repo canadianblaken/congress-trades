@@ -612,30 +612,36 @@ port keeps its own pid file, so the two portals start and stop independently.
 It still binds to `127.0.0.1`; to share it, put that port behind Tailscale as
 below, or behind a reverse proxy you control.
 
-### Reading it from your phone
-
-The portal binds to `127.0.0.1` only, deliberately: it has no login, and its
-Maintenance tab starts jobs. To read it from your own devices, put it behind a
-private network rather than opening a port. With Tailscale:
+### On every computer on your network
 
 ```bash
-tailscale serve --bg --https=8777 8777   # https://<this-machine>.<tailnet>.ts.net:8777/
-tailscale serve status
-tailscale serve --https=8777 off         # stop serving just this one
+./run.sh portal --host 0.0.0.0        # http://<this-machine's-address>:8777 from any device
 ```
 
-On Linux, `serve` needs root unless you once run
-`sudo tailscale set --operator=$USER`. Give it its own port as above. A bare `tailscale serve --bg 8777` takes the
-root of port 443, replacing anything that machine already serves there, and
-`tailscale serve reset` clears every mapping, not just this one. A sub-path
-(`--set-path`) does not work either: the portal's links and API calls are
-absolute.
+Bound to all addresses, the portal answers on the LAN and, if the machine runs
+Tailscale, directly on the tailnet too (`http://<machine>.<tailnet>.ts.net:8777`,
+encrypted by Tailscale) -- no `tailscale serve` needed, and a `serve` on the same
+port would conflict with it. Everything works from any device, including the
+model form and the watchlist: their guard accepts requests addressed to an IP or
+to this machine's own hostname, and still refuses rebound domain names and pages
+from other sites. The portal has no login, so anyone on the network can also
+press Refresh or Stop; use `--read-only` (above) for a network you do not trust.
 
-Everything reads normally that way. The model form will refuse to save or list
-models, because it only accepts requests addressed to `127.0.0.1` or
-`localhost`. That's the guard that keeps another site from redirecting your API
-key, so change models at the machine itself. Anyone on your tailnet can reach
-the jobs and the Stop button, so do not share the node.
+To keep it running across reboots, a systemd user unit is enough (with
+`loginctl enable-linger` so it starts without a login):
+
+```ini
+# ~/.config/systemd/user/congress-portal.service
+[Service]
+WorkingDirectory=/path/to/congress-trades
+ExecStart=/path/to/congress-trades/run.sh portal --host 0.0.0.0
+Restart=on-failure          # a crash restarts it; the Stop button does not
+[Install]
+WantedBy=default.target
+```
+
+`systemctl --user enable --now congress-portal`. Pressing Stop leaves it stopped;
+`systemctl --user start congress-portal` brings it back.
 
 ### Maintenance, from the page
 
