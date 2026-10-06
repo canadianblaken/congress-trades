@@ -5,6 +5,8 @@ cache/
 data/
 out/
 *.html
+# ...but not the front end, which is source: web/ holds the page and portal HTML.
+!congress_trades/web/*.html
 
 # Python
 __pycache__/

@@ -5,12 +5,16 @@ const cls=v=>v==null?'num':(v>0?'num pos':v<0?'num neg':'num');
 let facets={members:[],tickers:[]};
 
 // --- routing ---------------------------------------------------------------
-const routes=()=>[['','Overview'],['trends','Trends'],['explore','Explore'],['page','Full page'],
-  ...Object.entries(REPORTS).map(([k,v])=>['r/'+k,v.title]),['jobs','Maintenance']];
+// [hash, label, what the tab is for]. Descriptions come from the server: TABS for
+// the fixed tabs, each report's own blurb for the rest.
+const routes=()=>[...['','trends','explore','page'].map(h=>[h,TABS[h].title,TABS[h].blurb]),
+  ...Object.entries(REPORTS).map(([k,v])=>['r/'+k,v.title,v.blurb]),
+  ['jobs',TABS.jobs.title,TABS.jobs.blurb]];
 function nav(){
   const cur=location.hash.replace(/^#\//,'');
-  $('#nav').innerHTML=routes().map(([h,t])=>
-    `<a href="#/${h}"${h===cur?' aria-current="page"':''}>${esc(t)}</a>`).join('');
+  $('#nav').innerHTML=routes().map(([h,t,b])=>
+    `<a href="#/${h}" data-tip="${esc(b)}" aria-description="${esc(b)}"${
+      h===cur?' aria-current="page"':''}>${esc(t)}</a>`).join('');
 }
 async function route(){
   nav();
@@ -339,8 +343,10 @@ async function member(name){
 const tipbox=(()=>{const d=document.createElement('div'); d.id='tipbox';
   document.body.appendChild(d); return d;})();
 let tiphide=null;
+// A glossary term (data-g) or anything carrying its own text (data-tip: the tabs).
 function showTip(el){
-  const k=el.dataset.g, txt=GLOSS[k]; if(!txt) return;
+  const k=el.dataset.g||el.textContent.trim(), txt=el.dataset.g?GLOSS[k]:el.dataset.tip;
+  if(!txt) return;
   clearTimeout(tiphide);
   tipbox.innerHTML=`<b>${esc(k)}</b>${esc(txt)}`;
   tipbox.classList.add('on');
@@ -389,14 +395,15 @@ function annotate(root){
       node.parentNode.replaceChild(out,node); }
   });
 }
+const TIPPED='.gloss,[data-tip]';
 document.addEventListener('mouseover',e=>{
-  const g=e.target.closest&&e.target.closest('.gloss'); if(g) showTip(g);});
+  const g=e.target.closest&&e.target.closest(TIPPED); if(g) showTip(g);});
 document.addEventListener('mouseout',e=>{
-  if(e.target.closest&&e.target.closest('.gloss')) hideTip();});
+  if(e.target.closest&&e.target.closest(TIPPED)) hideTip();});
 document.addEventListener('focusin',e=>{
-  const g=e.target.closest&&e.target.closest('.gloss'); if(g) showTip(g);});
+  const g=e.target.closest&&e.target.closest(TIPPED); if(g) showTip(g);});
 document.addEventListener('focusout',e=>{
-  if(e.target.closest&&e.target.closest('.gloss')) hideTip();});
+  if(e.target.closest&&e.target.closest(TIPPED)) hideTip();});
 addEventListener('scroll',()=>tipbox.classList.remove('on'),{passive:true});
 
 // --- charts ----------------------------------------------------------------

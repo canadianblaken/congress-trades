@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Congress Trades</title>
+<style>__CSS__</style></head><body>
+<h1>Congress Trades</h1>
+<p class="sub">STOCK Act periodic transaction reports, straight from the House Clerk bulk feed
+   and Senate eFD. Disclosures lag trades by up to 45 days. Amounts are the ranges members
+   report, not exact values.</p>
+
+<div class="stats" id="stats"></div>
+
+<div class="filters">
+  <input type="search" id="q" placeholder="Filter members or tickers…" aria-label="Filter">
+  <select id="chamber" aria-label="Chamber">
+    <option value="">Both chambers</option><option>House</option><option>Senate</option>
+  </select>
+  <select id="floor" aria-label="Minimum disclosed amount">
+    <option value="0">Any amount</option>
+    <option value="15001">&ge; $15k</option>
+    <option value="50001">&ge; $50k</option>
+    <option value="100001">&ge; $100k</option>
+    <option value="250001">&ge; $250k</option>
+    <option value="1000001">&ge; $1M</option>
+  </select>
+  <select id="window" aria-label="Time window">
+    <option value="1">Last day</option>
+    <option value="7">Last week</option>
+    <option value="30">Last month</option>
+    <option value="90">Last 90 days</option>
+    <option value="365">Last year</option>
+    <option value="0" selected>All time</option>
+  </select>
+</div>
+
+<div class="views" role="tablist">
+  <button data-view="members" aria-current="true" title="One member at a time: who they are, their committees, filing record, money beyond trades, and every trade they disclosed. Click a bar in their chart to list that month.">Members</button>
+  <button data-view="movers" aria-current="false" title="Congress as a whole: trades per month (click a bar to list them), net buying by sector, the names most members traded, and large bets one member made alone.">Movers</button>
+  <button data-view="score" aria-current="false" title="Members ranked by how their trades did against the market and their own sector, with the warning that past results have not predicted future ones.">Scoreboard</button>
+</div>
+
+<div class="wrap" id="view-members">
+  <div class="roster" id="roster" role="list"></div>
+  <div class="detail" id="detail"></div>
+</div>
+
+<div id="view-movers" hidden></div>
+
+<div id="view-score" hidden></div>
+
+<p class="foot">Generated __GENERATED__ &middot;
+  disclosures under the reporting floor are excluded &middot; this is public disclosure data,
+  not investment advice.</p>
+<div class="tip" id="tip" role="status"></div>
+
+<script>__JS__</script>
+</body></html>

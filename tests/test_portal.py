@@ -16,6 +16,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from congress_trades.config import CONFIG  # noqa: E402
 from congress_trades.portal import server  # noqa: E402
 
+# Every front-end file must be in git, not just on this disk: a *.html ignore rule
+# once kept web/portal.html and web/page.html out of the repo, and a fresh clone
+# could start neither the portal nor publish while every local check passed.
+import subprocess  # noqa: E402
+_root = Path(__file__).resolve().parent.parent
+_tracked = subprocess.run(["git", "ls-files", "congress_trades/web"], cwd=_root,
+                          capture_output=True, text=True)
+if _tracked.returncode == 0:
+    missing = sorted(f"congress_trades/web/{f.name}" for f in (_root / "congress_trades/web").iterdir()
+                     if f"congress_trades/web/{f.name}" not in _tracked.stdout.split())
+    assert not missing, f"front-end files not in git (check .gitignore): {missing}"
+
 if not CONFIG.db_path.exists():
     print("skip: no database yet")
     sys.exit(0)

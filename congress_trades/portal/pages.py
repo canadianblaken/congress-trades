@@ -139,15 +139,35 @@ if(btn){ btn.onclick=async()=>{ btn.disabled=true; live.textContent='starting...
 """
 
 
+# What each fixed tab is for, shown on hover. Report tabs use their blurb in
+# jobs.REPORTS, so every tab's description lives in Python, in one place.
+TABS = {
+    "": ("Overview", "Headline numbers, buying and selling per month (click a point "
+                     "to list those trades), and a door into every report."),
+    "trends": ("Trends", "The most-traded names by net flow, dollar volume, trade "
+                         "count or how many members traded them, and buying against "
+                         "selling month by month. Click a bar to see who traded it."),
+    "explore": ("Explore", "Every disclosure, searchable and sortable: filter by "
+                           "member, ticker, chamber, direction, size or date, and open "
+                           "anyone's full record."),
+    "page": ("Full page", "The self-contained page `publish` writes: one HTML file "
+                          "you can save, share or open without the portal."),
+    "jobs": ("Maintenance", "Refresh the data, choose the AI model, and run the "
+                            "jobs that write to the database, one at a time."),
+}
+
+
+def _tab(href: str, label: str, tip: str, current: bool) -> str:
+    return (f'<a href="{href}" title="{html.escape(tip)}"'
+            f'{" aria-current=page" if current else ""}>{html.escape(label)}</a>')
+
+
 def shell(title: str, body: str, current: str = "") -> bytes:
-    nav = ['<a href="/"%s>Overview</a>' % (' aria-current="page"' if current == "" else "")]
-    nav.append('<a href="/page"%s>Full page</a>'
-               % (' aria-current="page"' if current == "page" else ""))
-    for key, spec in REPORTS.items():
-        cur = ' aria-current="page"' if current == key else ""
-        nav.append(f'<a href="/r/{key}"{cur}>{html.escape(spec["title"])}</a>')
-    nav.append('<a href="/jobs"%s>Maintenance</a>'
-               % (' aria-current="page"' if current == "jobs" else ""))
+    nav = [_tab("/", *TABS[""], current == ""),
+           _tab("/page", *TABS["page"], current == "page")]
+    nav += [_tab(f"/r/{key}", spec["title"], spec["blurb"], current == key)
+            for key, spec in REPORTS.items()]
+    nav.append(_tab("/jobs", *TABS["jobs"], current == "jobs"))
     running = _refresh["running"]
     verb = JOBS.get(_refresh["job"], {}).get("verb", "Running")
     bar = (f'<div class="bar"><button id="rf"{" disabled" if running else ""}>'
@@ -288,7 +308,9 @@ APP = (WEB / "portal.html").read_text(encoding="utf-8").replace(
                                    "args": {a: t.__name__ for a, t in v["args"].items()},
                                    "defaults": {a: str(d) for a, d in
                                                 v.get("defaults", {}).items()}}
-                               for k, v in REPORTS.items()})).encode("utf-8")
+                               for k, v in REPORTS.items()})).replace(
+    "__TABS__", json.dumps({k: {"title": t, "blurb": b} for k, (t, b) in TABS.items()})
+).encode("utf-8")
 # Served at /static/<name>. A fixed list, so a URL can never name another file.
 STATIC = {"portal.css": "text/css; charset=utf-8",
           "portal.js": "text/javascript; charset=utf-8",
