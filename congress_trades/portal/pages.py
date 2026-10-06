@@ -108,9 +108,9 @@ def _numclass(c: str) -> str:
     t = c.replace(",", "").strip()
     if re.fullmatch(r"[+-]?\$?\d*\.?\d+%?", t):
         if t.startswith("+") and t not in ("+0%", "+0.0%"):
-            return "num pos"
+            return "num up"
         if t.startswith("-"):
-            return "num neg"
+            return "num down"
         return "num"
     return ""
 
@@ -316,6 +316,7 @@ def app_html() -> bytes:
     if ro not in _app:
         _app[ro] = (WEB / "portal.html").read_text(encoding="utf-8").replace(
             "__REPORTS__", json.dumps({k: {"title": v["title"], "blurb": v["blurb"],
+                                           "group": v.get("group", "briefings"),
                                            "args": {a: t.__name__ for a, t in v["args"].items()},
                                            "defaults": {a: str(d) for a, d in
                                                         v.get("defaults", {}).items()}}
@@ -325,6 +326,7 @@ def app_html() -> bytes:
     return _app[ro]
 # Served at /static/<name>. A fixed list, so a URL can never name another file.
 STATIC = {"portal.css": "text/css; charset=utf-8",
+          "common.css": "text/css; charset=utf-8",
           "portal.js": "text/javascript; charset=utf-8",
           "common.js": "text/javascript; charset=utf-8"}
 

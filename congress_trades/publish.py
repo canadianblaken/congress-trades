@@ -187,6 +187,7 @@ WEB = Path(__file__).resolve().parent / "web"
 
 def _template() -> str:
     read = lambda n: (WEB / n).read_text(encoding="utf-8")
-    return (read("page.html").replace("__CSS__", read("page.css"))
-            .replace("__JS__", read("common.js") + read("page.js")))
+    return (read("page.html").replace("__COMMON_JS__", read("common.js"))
+            .replace("__CSS__", read("common.css") + read("page.css"))
+            .replace("__JS__", read("page.js")))
 

@@ -1,22 +1,39 @@
 const $=s=>document.querySelector(s), app=$('#app');
 const GLOSS={"vs index": "Median alpha measured against SPY over the identical window. The benchmark is the whole point: +6% in a window where SPY did +7% is behind the market.", "vs sector": "The same alpha measured against the trade's own sector ETF instead of SPY. It separates picking a stock from riding a sector. Unmapped sectors fall back to SPY, and on fund holdings this column is noise, because a fund inherits its sponsor's SIC code.", "beat index": "The share of this member's scored trades whose alpha against the index came out positive. A hit rate, not a size.", "alpha": "Excess return in the direction the member took: a buy scores stock minus benchmark, a sell scores benchmark minus stock. So exiting a name that then lagged the market counts as a win.", "90d ret": "The stock's own raw return over the 90 days after disclosure, before any benchmark is subtracted. Read it next to the benchmark, never alone.", "top name": "The share of this member's scored trades sitting in their single most-traded ticker. A high share means the record is really one bet.", "1st half": "The same member scored separately on the older and the newer half of their own trades. A big gap between the halves means the record is not stable.", "filing lag": "Days between the transaction and its disclosure. The STOCK Act allows 45.", "party unity": "The share of this member's yea/nay votes matching their own party's majority, computed from raw Voteview roll calls.", "DW-NOMINATE": "Voteview's ideology score on the first dimension. Negative is left, positive is right.", "net flow": "Disclosed buying minus disclosed selling for a name. Positive means Congress accumulated it on net; negative means it was sold down.", "disclosed": "The date the filing was made public. Everything here is measured from this date, not the trade date, because nobody outside the filing knew until then.", "disclosure date": "The date the filing was made public. Returns are measured from here, because trade-date returns would flatter these members and mean nothing.", "owner": "Who holds the asset: Self, Spouse, Joint or Dependent.", "amount": "Disclosures give a dollar bracket, never an exact figure. Every total here uses the bracket's lower bound, so it is a floor.", "min amount": "Only count disclosures whose bracket floor is at least this. $1,001-$15,000 is mostly rebalancing noise.", "horizon": "The forward window, in days, over which each return is measured.", "walk-forward": "Re-rank the members every year and grade them on the next one, pooling the folds. Harder to fool than a single split.", "measurable": "A disclosure with a ticker and a closed price window, so a return can actually be computed. Many filings have neither.", "distinct members": "How many different people traded the name. The convergence signal, and the hardest to skew with one heavy trader.", "dollar volume": "Disclosed dollars traded in a name, buys and sells added together. Bracket floors, so a lower bound.", "trade count": "The number of disclosures naming this stock.", "PTR": "Periodic Transaction Report: the filing a member must make within 45 days of a securities trade.", "SPY": "The S&P 500 ETF, used here as the index benchmark.", "sector ETF": "A fund tracking the trade's own industry, used as the second benchmark. The SIC-to-ETF mapping is a judgement call, not a definition.", "min trades": "Members below this many measurable trades are left out entirely: under about ten, a record is one lucky quarter.", "priced": "Disclosures for which a forward return could be computed, because the ticker resolved and the window has closed."};
 const pct=v=>v==null?'':(v>0?'+':'')+(v*100).toFixed(1)+'%';
-const cls=v=>v==null?'num':(v>0?'num pos':v<0?'num neg':'num');
+// Sign is a mark, not a hue: see common.css.
+const cls=v=>v==null?'num':(v>0?'num up':v<0?'num down':'num');
+const dirTag=t=>{ const k=(t||'').toLowerCase(); const c=k.startsWith('b')?'buy':k.startsWith('s')?'sell':'exchange';
+  return `<span class="tag ${c}">${esc(t||'')}</span>`; };
 let facets={members:[],tickers:[]};
 
 // --- routing ---------------------------------------------------------------
-// [hash, label, what the tab is for]. Descriptions come from the server: TABS for
-// the fixed tabs, each report's own blurb for the rest.
-// A read-only portal (shared with others) has no watchlist and no Maintenance.
-const routes=()=>[...['','trends','explore','watch','page'].map(h=>[h,TABS[h].title,TABS[h].blurb]),
-  ...Object.entries(REPORTS).map(([k,v])=>['r/'+k,v.title,v.blurb]),
-  ['jobs',TABS.jobs.title,TABS.jobs.blurb]].filter(([h])=>!READ_ONLY||!['watch','jobs'].includes(h));
+// Four places you go daily, then every report in one grouped menu, and Maintenance
+// set apart. Descriptions come from the server: TABS for the fixed tabs, each
+// report's own blurb for the rest. A read-only portal has no Watchlist or Maintenance.
+const PRIMARY=['','trends','explore','watch'];
+const GROUPS=[['performance','Performance'],['accountability','Accountability'],
+  ['briefings','Briefings & data']];
 function nav(){
   const cur=location.hash.replace(/^#\//,'');
-  $('#nav').innerHTML=routes().map(([h,t,b])=>
-    `<a href="#/${h}" data-tip="${esc(b)}" aria-description="${esc(b)}"${
-      h===cur?' aria-current="page"':''}>${esc(t)}</a>`).join('');
+  const tab=(h,t,b)=>`<a href="#/${h}" data-tip="${esc(b)}" aria-description="${esc(b)}"${
+    h===cur?' aria-current="page"':''}>${esc(t)}</a>`;
+  const prim=PRIMARY.filter(h=>!(READ_ONLY&&h==='watch')).map(h=>tab(h,TABS[h].title,TABS[h].blurb));
+  const inMenu=cur.startsWith('r/')||cur==='page';
+  const here=cur==='page'?TABS.page.title:(REPORTS[cur.slice(2)]||{}).title;
+  const groups=GROUPS.map(([g,label])=>{
+    const items=Object.entries(REPORTS).filter(([,v])=>v.group===g).map(([k,v])=>tab('r/'+k,v.title,v.blurb));
+    if(g==='briefings') items.push(tab('page',TABS.page.title,TABS.page.blurb));
+    return `<div class="menu-group"><h4>${label}</h4>${items.join('')}</div>`;}).join('');
+  $('#nav').innerHTML=prim.join('')+
+    `<details class="menu"><summary${inMenu?' aria-current="page"':''}>Reports${
+      inMenu&&here?`<span class="here">: ${esc(here)}</span>`:''}</summary>
+      <div class="menu-list">${groups}</div></details>`+
+    (READ_ONLY?'':'<span class="nav-gap"></span>'+tab('jobs',TABS.jobs.title,TABS.jobs.blurb));
 }
+// The menu closes on any click outside it, and on choosing a report.
+document.addEventListener('click',e=>{ document.querySelectorAll('details.menu[open]').forEach(d=>{
+  if(!d.contains(e.target)||e.target.closest('a')) d.removeAttribute('open'); }); });
 async function route(){
   nav();
   // The panel is fixed-position, so it would otherwise hang over the next view.
@@ -167,7 +184,7 @@ async function rows(){
     <td>${r.ticker?`<b class="mlink" data-t="${esc(r.ticker)}" title="${esc(NAMES[r.ticker]||'')}">${esc(r.ticker)}</b>`
       :'<span class="note">-</span>'}</td>
     <td>${esc((r.asset_name||'').slice(0,54))}</td>
-    <td class="${/^s/i.test(r.tx_type||'')?'neg':'pos'}">${esc(r.tx_type||'')}</td>
+    <td>${dirTag(r.tx_type)}</td>
     <td class="num">${esc(r.amount_range||'')}</td>
     <td class="${cls(r.ret_90)}">${pct(r.ret_90)}</td>
     <td class="${cls(r.alpha)}">${pct(r.alpha)}</td></tr>`).join('');
@@ -206,14 +223,14 @@ function drawPrice(d){
   const keep=arr=>arr.map(n=>n>=cut?n:0);
   const cap=$('#px-cap');
   if(cap) cap.textContent=`${grain} from the last refresh, over the span this name has `+
-    `been disclosed in. The line is ${up?'blue: Congress is a net buyer'
-      :'red: Congress is a net seller'} of it. `+(dense
+    `been disclosed in. The line is ${up?'aqua: Congress is a net buyer'
+      :'orange: Congress is a net seller'} of it. `+(dense
       ? `It is disclosed in most ${p.bucket==='month'?'months':p.bucket==='week'?'weeks':'sessions'}, `+
-        `so only periods of ${cut} or more are marked -- blue circles are buys, just `+
-        `under the line, red diamonds sells, just above it. Hover any point for the `+
+        `so only periods of ${cut} or more are marked -- aqua circles are buys, just `+
+        `under the line, orange diamonds sells, just above it. Hover any point for the `+
         `full count.`
-      : `Marks sit where the disclosures land, sized by how many: blue circles are `+
-        `buys, just under the line, red diamonds sells, just above it.`);
+      : `Marks sit where the disclosures land, sized by how many: aqua circles are `+
+        `buys, just under the line, orange diamonds sells, just above it.`);
   // A marker sits on the close, so it reads as a point on the line rather than a
   // second series floating beside it. Radius grows with the square root of the
   // count: area, not radius, is what the eye compares. The rings are hollow and
@@ -230,8 +247,8 @@ function drawPrice(d){
     pointBackgroundColor:C.surface,pointBorderColor:color,pointBorderWidth:1.6,
     borderColor:color,backgroundColor:color});
   // The line is drawn first and faded: it is the backdrop, and at full strength a
-  // blue net-buyer's line swallows the blue buy rings it is meant to carry. The
-  // markers keep the full hue, because that is where blue and red have to mean
+  // aqua net-buyer's line swallows the aqua buy rings it is meant to carry. The
+  // markers keep the full hue, because that is where aqua and orange have to mean
   // buy and sell.
   paint('c-px',{type:'line',data:{labels:p.labels,
       datasets:[{label:'Close',data:p.close,borderColor:fade(line,.5),
@@ -307,7 +324,7 @@ async function member(name){
     </div>
     ${otherDisclosures(d)}
     ${(d.top||[]).length?`<h3>Most-traded</h3>
-      <p class="note">Bar length is how many disclosures; blue is net buying, red net selling.</p>
+      <p class="note">Bar length is how many disclosures; aqua is net buying, orange net selling.</p>
       <div class="canvas-wrap" id="w-mem" style="height:${Math.min(d.top.length,12)*22+30}px">
         <canvas id="c-mem"></canvas></div>`:''}
     ${(d.committees||[]).length?`<h3>Committees</h3><div>${d.committees.map(c=>
@@ -319,7 +336,7 @@ async function member(name){
   annotate(el);
   if((d.top||[]).length){
     // Length is how often they traded the name; colour is which way it went on
-    // balance -- blue net buying, red net selling -- the same rule the trend
+    // balance -- aqua net buying, orange net selling -- the same rule the trend
     // charts use, so a reader carries one reading across the whole portal.
     paint('c-mem',{type:'bar',data:{labels:d.top.map(t=>t.ticker),
         datasets:[{data:d.top.map(t=>t.n),
@@ -414,11 +431,17 @@ addEventListener('scroll',()=>tipbox.classList.remove('on'),{passive:true});
 
 // --- charts ----------------------------------------------------------------
 // Two hues only, and they carry polarity rather than identity: buying vs selling
-// is a diverging scale about zero, so blue/red with a neutral zero rule is the
+// is a diverging scale about zero, so aqua/orange with a neutral zero rule is the
 // honest encoding. Both steps are the ones publish.py already uses, and the pair
 // validates against this surface for contrast and colour-vision separation.
-const C={buy:'#3987e5',sell:'#e66767',ink:'#9aa4b2',faint:'#6b7480',
-  grid:'rgba(255,255,255,.07)',surface:'#12161c'};
+// Chart colours come from the theme tokens, re-read whenever the theme changes.
+const C={};
+function themeColors(){
+  Object.assign(C,{buy:cssVar('--buy'),sell:cssVar('--sell'),ink:cssVar('--ink-2'),
+    faint:cssVar('--ink-3'),grid:cssVar('--grid'),surface:cssVar('--panel')});
+  Object.assign(tip,{backgroundColor:cssVar('--tip-bg'),borderColor:cssVar('--line-2'),
+    titleColor:cssVar('--heading'),bodyColor:cssVar('--ink')});
+}
 // Same hue, less weight -- for marks that have to sit behind something else.
 const fade=(hex,a)=>`rgba(${parseInt(hex.slice(1,3),16)},${parseInt(hex.slice(3,5),16)},${
   parseInt(hex.slice(5,7),16)},${a})`;
@@ -443,9 +466,9 @@ const px=v=>'$'+Number(v).toLocaleString(undefined,
 // bars carry the reading.
 const axis=(extra={})=>Object.assign({grid:{color:C.grid,drawBorder:false,drawTicks:false},
   border:{display:false},ticks:{color:C.faint,padding:6}},extra);
-const tip={backgroundColor:'#0b0e13',borderColor:'#2a3038',borderWidth:1,
-  titleColor:'#fff',bodyColor:'#d6dae0',padding:9,displayColors:true,boxPadding:4,
-  cornerRadius:6};
+const tip={borderWidth:1,padding:9,displayColors:true,boxPadding:4,cornerRadius:6};
+themeColors();
+addEventListener('themechange',()=>{ themeColors(); route(); });
 
 function tableView(head,rows){
   return '<details class="tv"><summary>Table view</summary><div class="tbl-scroll"><table><thead><tr>'+
@@ -519,15 +542,15 @@ async function drawTop(){
     $('#w-top').innerHTML='<div class="nochart">No matching trades.</div>';
     if(box) box.innerHTML=''; return; }
   const m=tstate.metric;
-  // Colour means direction on every metric here: blue where the name is net
-  // bought over the window, red where it is net sold. Length still carries the
+  // Colour means direction on every metric here: aqua where the name is net
+  // bought over the window, orange where it is net sold. Length still carries the
   // metric the reader picked, so the two channels answer different questions --
   // how much, and which way. Under net flow they agree by construction, because
   // there the bar itself is the signed number.
   const rows=m==='net'?d.rows.slice().sort((a,b)=>b.net-a.net):d.rows;
   const vals=rows.map(r=>m==='members'?r.members:m==='count'?r.count:m==='volume'?r.volume:r.net);
   const dollars=(m==='net'||m==='volume');
-  const hue=' Blue is a name Congress is net buying over this window, red net selling.';
+  const hue=' Aqua is a name Congress is net buying over this window, orange net selling.';
   cap.textContent=(m==='net'
     ? 'Disclosed buying minus selling per name, ordered by size in either direction, because a name Congress dumped says as much as one it bought.'
     : m==='volume' ? 'Disclosed dollars traded per name, buys and sells together.'
@@ -614,10 +637,10 @@ async function tickerPanel(sym){
     <div class="kv">
       <b>disclosures</b><span>${a.n.toLocaleString()}</span>
       <b>buys / sells</b><span>${a.buys} / ${a.sells}</span>
-      <b>net flow</b><span class="${a.net>0?'pos':a.net<0?'neg':''}">${money(a.net)}</span>
+      <b>net flow</b><span class="${a.net>0?'dir-buy':a.net<0?'dir-sell':''}">${money(a.net)}</span>
       <b>dollar volume</b><span>${money((a.buy_vol||0)+(a.sell_vol||0))}</span>
       <b>distinct members</b><span>${a.members}</span>
-      <b>vs index</b><span class="${d.alpha_med>0?'pos':d.alpha_med<0?'neg':''}">${
+      <b>vs index</b><span class="${d.alpha_med>0?'up':d.alpha_med<0?'down':''}">${
         d.alpha_med==null?'not priced yet':pct(d.alpha_med)+' median over '+d.alpha_n+' priced'}</span>
       <b>first seen</b><span>${esc(a.first_seen||'')}</span>
       <b>latest</b><span>${esc(a.last_seen||'')}</span>
@@ -634,14 +657,14 @@ async function tickerPanel(sym){
       <th>net</th></tr></thead><tbody>${d.members.map(m=>`<tr>
       <td><span class="mlink ${pc(m.party)}" data-m="${esc(m.member)}">${esc(m.full_name||m.member)}</span></td>
       <td class="num">${m.buys}</td><td class="num">${m.sells}</td>
-      <td class="num ${m.net>0?'pos':m.net<0?'neg':''}">${money(m.net)}</td></tr>`).join('')}
+      <td class="num ${m.net>0?'dir-buy':m.net<0?'dir-sell':''}">${money(m.net)}</td></tr>`).join('')}
       </tbody></table></div>
     <h3>Most recent</h3>
     <div class="tbl-scroll"><table><thead><tr><th>disclosed</th><th>member</th><th>type</th>
       <th>amount</th><th>alpha</th></tr></thead><tbody>${d.recent.map(r=>`<tr>
       <td class="num">${esc(r.disclosed||r.tx_date||'')}</td>
       <td class="${pc(r.party)}">${esc((r.full_name||r.member||'').slice(0,22))}</td>
-      <td class="${/^s/i.test(r.tx_type||'')?'neg':'pos'}">${esc(r.tx_type||'')}</td>
+      <td>${dirTag(r.tx_type)}</td>
       <td class="num">${esc(r.amount_range||'')}</td>
       <td class="${cls(r.alpha)}">${pct(r.alpha)}</td></tr>`).join('')}</tbody></table></div>
     <p style="margin-top:1rem"><button id="onlytk">show only this stock</button>
@@ -727,7 +750,7 @@ async function watchPage(){
   kind.onchange=opts; opts();
   const add=async()=>{ if(!val.value.trim()) return;
     const r=await watchSet(kind.value,val.value.trim(),true);
-    if(r.error){ msg.textContent=r.error; msg.className='note neg'; return; }
+    if(r.error){ msg.textContent=r.error; msg.className='note bad'; return; }
     watchPage(); };
   $('#w-add').onclick=add; val.onkeydown=e=>{ if(e.key==='Enter') add(); };
   app.querySelectorAll('button[data-rm]').forEach(b=>b.onclick=async()=>{
@@ -777,7 +800,7 @@ async function jobs(){
   app.innerHTML='<div class="spin">loading...</div>';
   const d=await (await fetch('/api/jobs')).json();
   const p=d.prereq;
-  const row=(k,label)=>`<div><b>${esc(label)}</b> <span class="${p[k].ok?'num pos':'num neg'}">`+
+  const row=(k,label)=>`<div><b>${esc(label)}</b> <span class="${p[k].ok?'num ok':'num bad'}">`+
     `${p[k].ok?'ok':'not ready'}</span> &mdash; ${esc(p[k].detail)}`+
     (!p[k].ok&&p[k].url?` &mdash; <a href="${esc(p[k].url)}" target="_blank" rel="noopener">`+
       `get one free</a>, then add <code>CONGRESS_API_KEY=...</code> to <code>.env</code>`:'')+`</div>`;
@@ -842,7 +865,7 @@ async function modelForm(){
     dl=$('#m-models'), msg=$('#m-msg');
   if(!sel) return;
   sel.innerHTML=presets.map(p=>`<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
-  const say=(t,bad)=>{msg.textContent=t; msg.className='note'+(bad?' neg':'');};
+  const say=(t,bad)=>{msg.textContent=t; msg.className='note'+(bad?' bad':'');};
   const fill=list=>{dl.innerHTML=(list||[]).map(m=>`<option value="${esc(m)}">`).join('');};
   // Same-provider fields keep what is saved; switching provider starts clean,
   // and the saved key is never offered to a different company.
@@ -879,7 +902,7 @@ async function modelForm(){
     try{ const r=await post('/api/model');
       if(r.error){ say(r.error,true); e.target.disabled=false; return; }
       await jobs(); const m=$('#m-msg');
-      if(m){ m.textContent='Saved. Press Check model to try it.'; m.className='note pos'; }
+      if(m){ m.textContent='Saved. Press Check model to try it.'; m.className='note ok'; }
     }catch(err){ say('could not reach the portal',true); e.target.disabled=false; }
   };
 }
@@ -937,4 +960,5 @@ $('#st').onclick=async()=>{
 
 // Hidden rather than removed: tick() and the handlers above still address them.
 if(READ_ONLY) ['#rf','#st'].forEach(s=>$(s).hidden=true);
+wireThemeToggle($('#theme'));
 statline(); route(); tick();

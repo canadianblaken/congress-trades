@@ -263,7 +263,7 @@ function wireChart(scope, onPick) {
 function unityLine(m) {
   if (m.unity == null) return "";
   const lo = 75, pct = Math.max(0, Math.min(100, (m.unity - lo) / (100 - lo) * 100));
-  const col = m.party === "D" ? "#8fb8ea" : m.party === "R" ? "#eb9a9a" : "var(--ink-2)";
+  const col = m.party === "D" ? "var(--dem)" : m.party === "R" ? "var(--rep)" : "var(--ink-2)";
   return `<p class="unity">Votes with own party <b>${m.unity}%</b>
     <span class="meter" title="${m.unity}% (scale ${lo}-100%)">
       <i style="width:${pct}%; background:${col}"></i></span>
@@ -663,3 +663,4 @@ $("#floor").value = "__DEFAULT_FLOOR__";
 ["#q","#chamber","#window","#floor"].forEach(s =>
   $(s).addEventListener("input", refresh));
 refresh();
+wireThemeToggle($("#theme"));

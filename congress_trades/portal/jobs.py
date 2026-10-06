@@ -16,54 +16,54 @@ from .api import _ro
 # listed here is never passed through to the subprocess, so a crafted URL cannot
 # smuggle arguments into the CLI.
 REPORTS: dict[str, dict] = {
-    "digest":    {"title": "Digest",    "args": {"days": int, "floor": int},
+    "digest":    {"group": "briefings", "title": "Digest",    "args": {"days": int, "floor": int},
                   "defaults": {"days": 90, "floor": CONFIG.default_floor},
                   "blurb": "Prompt-sized brief of the last 90 days."},
-    "scorecard": {"title": "Scoreboard", "args": {"floor": int, "horizon": str,
+    "scorecard": {"group": "performance", "title": "Scoreboard", "args": {"floor": int, "horizon": str,
                                                   "limit": int, "min-trades": int},
                   "defaults": {"floor": CONFIG.default_floor, "horizon": "90",
                                "limit": 0, "min-trades": 10},
                   "blurb": "Members ranked by benchmark-adjusted record."},
-    "backtest":  {"title": "Backtest",  "args": {"horizon": str, "floor": int,
+    "backtest":  {"group": "performance", "title": "Backtest",  "args": {"horizon": str, "floor": int,
                                                  "walk-forward": bool},
                   "defaults": {"horizon": "90", "floor": 0},
                   "blurb": "Would following the disclosures actually have paid?"},
-    "lag":       {"title": "Filing lag", "args": {"floor": int}, "defaults": {"floor": 1},
+    "lag":       {"group": "performance", "title": "Filing lag", "args": {"floor": int}, "defaults": {"floor": 1},
                   "blurb": "Does a late filing predict a better trade?"},
-    "timing":    {"title": "Committee timing",
+    "timing":    {"group": "performance", "title": "Committee timing",
                   "args": {"floor": int, "window": int, "sector-matched": bool},
                   "defaults": {"floor": 1, "window": 30},
                   "blurb": "Do members trade around their own hearings? Tick "
                            "sector-matched for the arm that requires the hearing "
                            "to be about the industry traded."},
-    "mix":       {"title": "Asset mix", "args": {"floor": int}, "defaults": {"floor": 0},
+    "mix":       {"group": "briefings", "title": "Asset mix", "args": {"floor": int}, "defaults": {"floor": 0},
                   "blurb": "Who is trading and who is parking."},
-    "alerts":    {"title": "Alerts",    "args": {"days": int}, "defaults": {"days": 14},
+    "alerts":    {"group": "briefings", "title": "Alerts",    "args": {"days": int}, "defaults": {"days": 14},
                   "blurb": "What crossed a bar recently. Never marks anything seen."},
-    "flags":     {"title": "Flags", "args": {}, "defaults": {},
+    "flags":     {"group": "accountability", "title": "Flags", "args": {}, "defaults": {},
                   "blurb": "Per member, side by side: late filings, trades in sectors "
                            "their committees oversee, PAC money from those sectors, and "
                            "large bets no other member made. Facts, not a score."},
-    "compliance": {"title": "Compliance", "args": {}, "defaults": {},
+    "compliance": {"group": "accountability", "title": "Compliance", "args": {}, "defaults": {},
                    "blurb": "Filings past the STOCK Act's 45-day deadline, by member "
                             "and the most extreme cases."},
-    "annual":    {"title": "Annual reports", "args": {}, "defaults": {},
+    "annual":    {"group": "accountability", "title": "Annual reports", "args": {}, "defaults": {},
                   "blurb": "Debts, outside income and board seats from the annual "
                            "disclosures fetched so far."},
-    "finance":   {"title": "PAC money", "args": {}, "defaults": {},
+    "finance":   {"group": "accountability", "title": "PAC money", "args": {}, "defaults": {},
                   "blurb": "Committee jurisdiction x PAC money x trades: who takes "
                            "money from the industries they oversee, and trades them."},
-    "lobbying":  {"title": "Lobbying", "args": {}, "defaults": {},
+    "lobbying":  {"group": "accountability", "title": "Lobbying", "args": {}, "defaults": {},
                   "blurb": "LDA lobbying filings against the sectors members trade."},
-    "judiciary": {"title": "Judges", "args": {}, "defaults": {},
+    "judiciary": {"group": "accountability", "title": "Judges", "args": {}, "defaults": {},
                   "blurb": "Federal judges' disclosed holdings: what the bulk "
                            "snapshot covers."},
-    "jurisdiction": {"title": "Committee jurisdiction", "args": {}, "defaults": {},
+    "jurisdiction": {"group": "briefings", "title": "Committee jurisdiction", "args": {}, "defaults": {},
                      "blurb": "Which industries each committee oversees. A table "
                               "generated once by a model and committed as data; "
                               "regenerating it is a CLI job, because the point of "
                               "it is reading the diff."},
-    "parser-qa": {"title": "Parser QA", "args": {}, "defaults": {}, "pre": True,
+    "parser-qa": {"group": "briefings", "title": "Parser QA", "args": {}, "defaults": {}, "pre": True,
                   "blurb": "Does the House parser still read the filings? Counts "
                            "transaction headers against rows returned across every "
                            "cached filing, and shows what model audits have found. "

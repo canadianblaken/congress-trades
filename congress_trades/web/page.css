@@ -1,13 +1,4 @@
 
-  :root {
-    color-scheme: dark;
-    --bg:#0e1116; --panel:#12161c; --line:#222831; --line-2:#2a3038;
-    --ink:#d6dae0; --ink-2:#9aa4b2; --ink-3:#6b7480; --white:#fff;
-    --buy:#3987e5; --sell:#e66767; --link:#6cb6ff;
-    --dem:#4f9dff; --rep:#ff5c5c;
-  }
-  .pD { color:var(--dem) !important; } .pR { color:var(--rep) !important; }
-  .pI { color:var(--white) !important; }
   svg .bar { cursor:pointer; }
   .pick { display:inline-block; margin:.6rem 0 .2rem; padding:.2rem .6rem; font-size:13px;
           border:1px solid var(--line-2); border-radius:6px; background:var(--panel); }
@@ -17,17 +8,19 @@
      wins on source order -- so hiding a view needs this to actually take effect. */
   [hidden] { display:none !important; }
   body { background:var(--bg); color:var(--ink); margin:0;
-         font:15px/1.55 -apple-system,Segoe UI,Roboto,sans-serif;
+         font:15px/1.55 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
          padding:1.6rem 1.2rem 4rem; max-width:1240px; margin:0 auto; }
   a { color:var(--link); }
-  h1 { color:var(--white); font-size:1.6rem; margin:.2rem 0 .3rem;
-       border-bottom:2px solid var(--line-2); padding-bottom:.4rem; }
+  .top { display:flex; align-items:center; gap:1rem; padding-bottom:.5rem;
+         border-bottom:1px solid var(--line); }
+  .brand { color:var(--heading); font-size:1.4rem; margin:.2rem auto .1rem 0;
+           letter-spacing:-.01em; }
   .site-nav { font-size:14px; margin:0 0 1rem; }
   .sub { color:var(--ink-3); font-size:13px; margin:.5rem 0 1.2rem; }
   .stats { display:flex; flex-wrap:wrap; gap:1.6rem; margin:0 0 1.4rem;
            padding:.9rem 1.1rem; background:var(--panel);
            border:1px solid var(--line); border-radius:8px; }
-  .stat b { display:block; color:var(--white); font-size:1.35rem; font-weight:600;
+  .stat b { display:block; color:var(--heading); font-size:1.35rem; font-weight:600;
             line-height:1.2; font-variant-numeric:tabular-nums; }
   .stat span { color:var(--ink-3); font-size:12px; text-transform:uppercase;
                letter-spacing:.04em; }
@@ -45,20 +38,20 @@
   .roster button { display:flex; justify-content:space-between; gap:.5rem; width:100%;
     background:none; border:0; border-bottom:1px solid var(--line); color:var(--ink);
     font:inherit; text-align:left; padding:.55rem .75rem; cursor:pointer; }
-  .roster button:hover { background:#171c23; }
-  .roster button[aria-current=true] { background:#1b2430; color:var(--white);
+  .roster button:hover { background:var(--row-hover); }
+  .roster button[aria-current=true] { background:var(--raised); color:var(--heading);
     box-shadow:inset 3px 0 0 var(--link); }
   .roster .who { min-width:0; }
   .roster .who i { display:block; font-style:normal; color:var(--ink-3); font-size:11.5px; }
   .roster .n { color:var(--ink-2); font-variant-numeric:tabular-nums; font-size:13px; }
   .detail { background:var(--panel); border:1px solid var(--line); border-radius:8px;
             padding:1.1rem 1.2rem; min-height:340px; }
-  .detail h2 { color:var(--white); margin:0 0 .15rem; font-size:1.25rem; }
+  .detail h2 { color:var(--heading); margin:0 0 .15rem; font-size:1.25rem; }
   .detail .meta { color:var(--ink-3); font-size:13px; margin-bottom:1rem; }
   .profile { display:flex; gap:1rem; align-items:flex-start; margin-bottom:1rem;
              padding-bottom:1rem; border-bottom:1px solid var(--line); }
   .profile img { width:74px; height:92px; object-fit:cover; border-radius:6px;
-                 border:1px solid var(--line-2); flex:none; background:#0c0f14; }
+                 border:1px solid var(--line-2); flex:none; background:var(--bg); }
   .profile .who { min-width:0; }
   .profile .bio { color:var(--ink-2); font-size:13px; margin:.45rem 0 .5rem;
                   max-width:72ch; }
@@ -68,20 +61,20 @@
           color:var(--ink-2); }
   /* Party is a bordered tint + letter, never a solid fill: the solid blue/red in this
      panel belong to buy/sell, and identity must not ride on colour alone. */
-  .chip.p-D { color:#8fb8ea; border-color:#2f4a6d; background:#141d2a; }
-  .chip.p-R { color:#eb9a9a; border-color:#6d3434; background:#2a1616; }
+  .chip.p-D { color:var(--dem); border-color:color-mix(in srgb, var(--dem) 40%, transparent); background:color-mix(in srgb, var(--dem) 10%, transparent); }
+  .chip.p-R { color:var(--rep); border-color:color-mix(in srgb, var(--rep) 40%, transparent); background:color-mix(in srgb, var(--rep) 10%, transparent); }
   .chip.p-I { color:var(--ink-2); }
-  .chip.former { color:#d8b06a; border-color:#5c4622; background:#251c0e; }
+  .chip.former { color:var(--warn); border-color:color-mix(in srgb, var(--warn) 40%, transparent); background:color-mix(in srgb, var(--warn) 10%, transparent); }
   .toptick { color:var(--ink-2); font-size:12.5px; margin-top:.35rem; }
   .comm { margin:.9rem 0 0; }
   .comm h4 { color:var(--ink-2); font-size:11.5px; text-transform:uppercase;
              letter-spacing:.04em; margin:0 0 .3rem; font-weight:600; }
   .comm ul { margin:0; padding:0; list-style:none; font-size:12.5px; color:var(--ink-2); }
   .comm li { padding:.1rem 0; }
-  .comm .chair { color:#d8b06a; font-weight:600; }
+  .comm .chair { color:var(--warn); font-weight:600; }
   .overlap { margin-top:.7rem; padding:.6rem .75rem; border-radius:6px;
-             border:1px solid #5c4622; background:#1d1710; }
-  .overlap h4 { color:#d8b06a; }
+             border:1px solid color-mix(in srgb, var(--warn) 40%, transparent); background:color-mix(in srgb, var(--warn) 7%, transparent); }
+  .overlap h4 { color:var(--warn); }
   .overlap li { color:var(--ink); }
   .overlap .why { color:var(--ink-3); }
   .overlap .note { color:var(--ink-3); font-size:11.5px; margin:.4rem 0 0; }
@@ -95,17 +88,14 @@
   th { color:var(--ink-3); font-weight:600; font-size:11.5px; text-transform:uppercase;
        letter-spacing:.03em; position:sticky; top:0; background:var(--panel); }
   td.num { font-variant-numeric:tabular-nums; white-space:nowrap; }
-  .tag { font-size:11px; padding:.1rem .4rem; border-radius:3px; font-weight:600; }
-  .tag.buy { color:var(--buy); background:#12233a; }
-  .tag.sell { color:var(--sell); background:#3a1c1c; }
-  .tag.late { color:#d8b06a; background:#251c0e; border:1px solid #5c4622; margin-left:.3rem; }
+  .tag.late { color:var(--warn); background:color-mix(in srgb, var(--warn) 10%, transparent); border:1px solid color-mix(in srgb, var(--warn) 40%, transparent); margin-left:.3rem; }
   .lag { color:var(--ink-2); font-size:12.5px; margin-top:.3rem; }
   .lag b { color:var(--ink); }
-  .lag .bad { color:#d8b06a; }
+  .lag .bad { color:var(--warn); }
   .unity { color:var(--ink-2); font-size:12.5px; margin-top:.3rem; }
   .unity b { color:var(--ink); }
   .meter { display:inline-block; width:110px; height:7px; border-radius:4px;
-           background:#1b2027; vertical-align:middle; margin:0 .4rem; position:relative;
+           background:var(--raised); vertical-align:middle; margin:0 .4rem; position:relative;
            border:1px solid var(--line-2); }
   .meter i { position:absolute; left:0; top:0; bottom:0; border-radius:3px; display:block; }
   .tbl-scroll { max-height:52vh; overflow:auto; }
@@ -113,23 +103,23 @@
   .chart-wrap { overflow-x:auto; }
   svg text { fill:var(--ink-3); font-size:10px; }
   svg .zero { stroke:var(--line-2); }
-  .tip { position:fixed; pointer-events:none; background:#1b2027; color:var(--ink);
+  .tip { position:fixed; pointer-events:none; background:var(--raised); color:var(--ink);
     border:1px solid var(--line-2); border-radius:6px; padding:.4rem .55rem; font-size:12px;
-    box-shadow:0 4px 14px #0009; opacity:0; transition:opacity .1s; z-index:9; }
+    box-shadow:0 4px 14px var(--shadow); opacity:0; transition:opacity .1s; z-index:9; }
   .foot { color:var(--ink-3); font-size:12.5px; margin-top:2rem; border-top:1px solid var(--line);
           padding-top:.9rem; }
   .views { display:flex; gap:.3rem; margin:0 0 1rem; }
   .views button { background:var(--panel); border:1px solid var(--line-2); color:var(--ink-2);
     font:inherit; font-size:14px; padding:.4rem .9rem; border-radius:6px; cursor:pointer; }
-  .views button[aria-current=true] { background:#1b2430; color:var(--white);
-    border-color:#365070; }
+  .views button[aria-current=true] { background:var(--raised); color:var(--heading);
+    border-color:var(--raised-line); }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:8px;
            padding:1.1rem 1.2rem; }
-  .panel h3 { color:var(--white); margin:0 0 .2rem; font-size:1.05rem; }
+  .panel h3 { color:var(--heading); margin:0 0 .2rem; font-size:1.05rem; }
   .panel .hint { color:var(--ink-3); font-size:12.5px; margin:0 0 1rem; }
   button.jump { all:unset; cursor:pointer; color:var(--link);
                 border-bottom:1px dotted currentColor; font-variant-numeric:tabular-nums; }
-  button.jump:hover, button.jump:focus-visible { color:var(--white); }
+  button.jump:hover, button.jump:focus-visible { color:var(--heading); }
   .secrow { display:grid; grid-template-columns:220px 1fr 54px; gap:.6rem; align-items:center;
             font-size:13px; margin-bottom:.28rem; }
   .secrow .nm { color:var(--ink-2); text-align:right; overflow:hidden; text-overflow:ellipsis;
@@ -138,6 +128,6 @@
   .track { position:relative; height:17px; }
   .track i { position:absolute; top:1px; height:15px; border-radius:3px; display:block; }
   .track .axis { position:absolute; top:0; bottom:0; width:1px; background:var(--line-2); }
-  .mv-tick { font-weight:600; color:var(--white); }
+  .mv-tick { font-weight:600; color:var(--heading); }
   .mv-mem { color:var(--ink-3); font-size:12px; }
-  .bigmult { color:#d8b06a; font-weight:600; }
+  .bigmult { color:var(--warn); font-weight:600; }

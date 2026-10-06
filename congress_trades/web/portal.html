@@ -3,16 +3,21 @@
 <meta name="robots" content="noindex, nofollow">
 <title>Congress Trades</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="/static/common.js"></script>
+<link rel="stylesheet" href="/static/common.css">
 <link rel="stylesheet" href="/static/portal.css">
 <link rel="alternate" type="application/rss+xml" title="Congress trades: alerts" href="/feed.xml"></head><body>
-<h1>Congress Trades</h1>
+<header class="top">
+  <a class="brand" href="#/">Congress Trades</a>
+  <div class="top-right">
+    <span class="live" id="live"></span><span class="note" id="stat"></span>
+    <button class="ghost" id="rf">Refresh data</button>
+    <button class="ghost" id="st">Stop portal</button>
+    <button class="theme-toggle" id="theme"></button>
+  </div>
+</header>
 <nav class="nav" id="nav"></nav>
-<div class="bar"><button id="rf">Refresh data</button>
-  <button id="st">Stop portal</button>
-  <span class="live" id="live"></span>
-  <span class="note" id="stat"></span></div>
 <div class="app" id="app"><div class="spin">loading...</div></div>
 <script>const REPORTS=__REPORTS__, TABS=__TABS__, READ_ONLY=__READ_ONLY__;</script>
-<script src="/static/common.js"></script>
 <script src="/static/portal.js"></script>
 </body></html>

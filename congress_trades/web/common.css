@@ -1,0 +1,75 @@
+/* Shared by the portal and the static page: one set of tokens, two themes.
+
+   Three things are binary in this data and must never share a colour:
+     party      blue / red, on member names only (text)
+     direction  buy aqua / sell orange, on chart marks and BUY/SELL tags -- never
+                colour alone: buys sit above a baseline, sells below, tags carry text
+     sign       no colour at all: a return is plain ink with a ▲ or ▼
+   The buy/sell pair is the reference palette's aqua/orange, validated (CVD and
+   normal-vision separation, both themes). No direction pair clears every check
+   beside the party colours, so direction always carries a second encoding.
+
+   Light is the default; dark comes from the OS setting or the toggle, and the
+   toggle wins both ways (data-theme on <html>). */
+:root {
+  color-scheme: light;
+  --bg:#f9f9f7; --panel:#fcfcfb; --raised:#f0efec; --raised-hover:#e7e6e1;
+  --raised-line:#c3c2b7; --row-hover:#f3f2ee; --line:#e1e0d9; --line-2:#d3d2cb;
+  --heading:#0b0b0b; --ink:#1f1f1d; --ink-2:#52514e; --ink-3:#6b6a65; --link:#1c5cab;
+  --dem:#1c5cab; --rep:#c42f2f; --ind:#1f1f1d;
+  --buy:#1baf7a; --sell:#eb6834;
+  --good:#006300; --bad:#c42f2f; --warn:#8a5d00;
+  --err-bg:#fdf0ef; --tip-bg:#ffffff; --shadow:rgba(11,11,11,.14); --grid:#e1e0d9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg:#0d0d0d; --panel:#1a1a19; --raised:#262624; --raised-hover:#31312e;
+    --raised-line:#45453f; --row-hover:#222220; --line:#2c2c2a; --line-2:#383835;
+    --heading:#ffffff; --ink:#e4e3dc; --ink-2:#c3c2b7; --ink-3:#898781; --link:#6da7ec;
+    --dem:#5598e7; --rep:#e66767; --ind:#ffffff;
+    --buy:#199e70; --sell:#d95926;
+    --good:#0ca30c; --bad:#e66767; --warn:#fab219;
+    --err-bg:#2a1616; --tip-bg:#0d0d0d; --shadow:rgba(0,0,0,.5); --grid:#2c2c2a;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg:#0d0d0d; --panel:#1a1a19; --raised:#262624; --raised-hover:#31312e;
+  --raised-line:#45453f; --row-hover:#222220; --line:#2c2c2a; --line-2:#383835;
+  --heading:#ffffff; --ink:#e4e3dc; --ink-2:#c3c2b7; --ink-3:#898781; --link:#6da7ec;
+  --dem:#5598e7; --rep:#e66767; --ind:#ffffff;
+  --buy:#199e70; --sell:#d95926;
+  --good:#0ca30c; --bad:#e66767; --warn:#fab219;
+  --err-bg:#2a1616; --tip-bg:#0d0d0d; --shadow:rgba(0,0,0,.5); --grid:#2c2c2a;
+}
+
+body { font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+
+/* party: on names */
+.pD,.mlink.pD { color:var(--dem) !important; }
+.pR,.mlink.pR { color:var(--rep) !important; }
+.pI,.mlink.pI { color:var(--ind) !important; }
+
+/* sign: ink plus a mark, never a hue that could be read as party or direction */
+.up::before { content:"\25B2\FE0E\00A0"; color:var(--good); font-size:.78em; }
+.down::before { content:"\25BC\FE0E\00A0"; color:var(--ink-3); font-size:.78em; }
+
+/* direction: text in a tinted tag, so it never rests on colour alone */
+.tag { display:inline-block; font-size:11px; padding:.08rem .4rem; border-radius:4px;
+  font-weight:600; letter-spacing:.02em; text-transform:uppercase; }
+.tag.buy { color:var(--ink); background:color-mix(in srgb, var(--buy) 22%, transparent);
+  box-shadow:inset 3px 0 0 var(--buy); }
+.tag.sell { color:var(--ink); background:color-mix(in srgb, var(--sell) 22%, transparent);
+  box-shadow:inset 3px 0 0 var(--sell); }
+.tag.exchange { color:var(--ink-2); background:var(--raised); }
+.dir-buy::before,.dir-sell::before { content:"\25CF\00A0"; }
+.dir-buy::before { color:var(--buy); } .dir-sell::before { color:var(--sell); }
+
+/* status: words carry it; colour only reinforces */
+.ok { color:var(--good); } .bad { color:var(--bad); }
+
+/* theme toggle */
+.theme-toggle { background:none; border:1px solid var(--line-2); color:var(--ink-2);
+  border-radius:6px; padding:.3rem .55rem; font:inherit; font-size:12.5px; cursor:pointer; }
+.theme-toggle:hover { color:var(--heading); border-color:var(--raised-line); }
