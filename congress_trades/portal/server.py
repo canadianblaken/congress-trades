@@ -153,6 +153,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/watch":
             self._json(api_watch())
             return
+        if path == "/feed.xml":
+            from .. import alerts
+            here = f"http://{self.headers.get('Host') or f'{HOST}:{PORT}'}/"
+            self._send(alerts.to_rss(alerts.feed(cfg=CONFIG), here).encode("utf-8"),
+                       "application/rss+xml; charset=utf-8")
+            return
         if path == "/api/model":
             self._json({"presets": PRESETS, "current": model_current()})
             return

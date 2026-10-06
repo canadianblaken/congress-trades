@@ -344,6 +344,18 @@ CREATE TABLE IF NOT EXISTS meeting_topics (
     updated_at TEXT
 );
 
+-- What each alert said, kept when it is recorded, so it can be read back as a
+-- feed. alerts_seen remembers THAT something alerted; this remembers what.
+CREATE TABLE IF NOT EXISTS alert_log (
+    fp      TEXT PRIMARY KEY,           -- the same fingerprint as alerts_seen
+    at      TEXT NOT NULL,              -- when the alert was recorded (UTC ISO)
+    kind    TEXT NOT NULL,              -- trade | converge
+    line    TEXT NOT NULL,
+    why     TEXT,                       -- the reasons, comma separated
+    doc_url TEXT                        -- the filing, for a trade alert
+);
+CREATE INDEX IF NOT EXISTS idx_alert_log_at ON alert_log(at);
+
 -- Members and tickers you follow. Personal: it lives here rather than in git,
 -- and the shareable static page never includes it. A member is stored by the
 -- name as filed (congress_trades.member); a ticker need not have been traded

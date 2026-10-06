@@ -32,6 +32,8 @@ day is silent, which is what makes this safe to put on a timer.
 from __future__ import annotations
 
 import datetime as dt
+import email.utils
+from xml.sax.saxutils import escape
 
 from . import db, jurisdiction, scorecard
 from .config import CONFIG
@@ -85,11 +87,14 @@ def _migrate_ids(conn) -> None:
                  "AND fingerprint NOT GLOB '*|*'")
 
 
-def _remember(conn, fps: list[str]) -> None:
+def _remember(conn, alerts: list[dict]) -> None:
     now = db.utcnow()
-    for f in fps:
+    for a in alerts:
         conn.execute("INSERT OR IGNORE INTO alerts_seen (fingerprint, first_seen) "
-                     "VALUES(?,?)", (f, now))
+                     "VALUES(?,?)", (a["fp"], now))
+        conn.execute("INSERT OR IGNORE INTO alert_log (fp, at, kind, line, why, doc_url) "
+                     "VALUES(?,?,?,?,?,?)", (a["fp"], now, a["kind"], a["line"],
+                                             ", ".join(a.get("why") or []), a.get("doc_url") or ""))
 
 
 def money(n):
@@ -108,7 +113,7 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
         rows = [dict(r) for r in conn.execute(
             f"""SELECT t.id, t.member, t.chamber, t.ticker, t.tx_type, t.tx_date,
                       t.disclosed, t.amount_min, t.amount_range, t.owner, t.occ,
-                      t.asset_name,
+                      t.asset_name, t.doc_url,
                       COALESCE(s.sector,'') AS sector,
                       COALESCE(NULLIF(t.disclosed,''), t.tx_date) AS d0
                  FROM (SELECT t.*, {_OCC} AS occ FROM congress_trades t) t
@@ -167,7 +172,7 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
                         "ticker": r["ticker"], "tx_type": r["tx_type"],
                         "amount": r["amount_min"], "range": r["amount_range"],
                         "disclosed": r["disclosed"], "sector": r["sector"],
-                        "why": reasons,
+                        "why": reasons, "doc_url": r["doc_url"],
                         "line": f"{r['member']} {r['tx_type']} "
                                 f"{r['ticker'] or (r['asset_name'] or '?')[:40]} "
                                 f"{money(r['amount_min'])} ({', '.join(reasons)})"})
@@ -188,7 +193,7 @@ def find(days: int = 14, cfg=CONFIG, record: bool = True) -> list[dict]:
                         "line": f"{r['n']} members traded {r['ticker']} in "
                                 f"{CONVERGE_WINDOW}d"})
         if record and out:
-            _remember(conn, [a["fp"] for a in out])
+            _remember(conn, out)
     return out
 
 
@@ -239,6 +244,38 @@ def to_text(alerts: list[dict], days: int = 14) -> str:
           f"persist in this data ({r_text}), so an alert on a good record would be "
           "noise wearing a signal's clothes."]
     return "\n".join(L) + "\n"
+
+
+def feed(limit: int = 100, cfg=CONFIG) -> list[dict]:
+    """The most recently recorded alerts, newest first."""
+    with db.connect(cfg.db_path) as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT * FROM alert_log ORDER BY at DESC, fp LIMIT ?", (limit,))]
+
+
+def to_rss(items: list[dict], link: str = "") -> str:
+    """RSS 2.0 of recorded alerts. An item links to its filing when it has one;
+    the guid is the alert's fingerprint, so a reader never shows one twice."""
+    def date(iso):
+        try:
+            return email.utils.format_datetime(dt.datetime.fromisoformat(iso))
+        except ValueError:
+            return ""
+    out = ['<?xml version="1.0" encoding="utf-8"?>', '<rss version="2.0"><channel>',
+           "<title>Congress trades: alerts</title>",
+           f"<link>{escape(link or 'https://github.com/canadianblaken/congress-trades')}</link>",
+           "<description>Disclosures that crossed a bar: size, unusual for the member, "
+           "their committee's sector, convergence, or your watchlist.</description>"]
+    for a in items:
+        out += ["<item>", f"<title>{escape(a['line'])}</title>",
+                f'<guid isPermaLink="false">{escape(a["fp"])}</guid>',
+                f"<pubDate>{date(a['at'])}</pubDate>"]
+        if a.get("doc_url"):
+            out.append(f"<link>{escape(a['doc_url'])}</link>")
+        if a.get("why"):
+            out.append(f"<description>{escape(a['why'])}</description>")
+        out.append("</item>")
+    return "\n".join(out + ["</channel></rss>", ""])
 
 
 def headline(alerts: list[dict]) -> str:

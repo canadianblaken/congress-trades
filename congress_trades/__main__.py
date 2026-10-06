@@ -195,6 +195,8 @@ def main(argv=None) -> int:
     p.add_argument("--dry-run", action="store_true",
                    help="look without marking anything as seen")
     p.add_argument("--headline", action="store_true", help="one line, for a push")
+    p.add_argument("--rss", action="store_true",
+                   help="print the recorded alerts as an RSS feed; finds nothing new")
     p.add_argument("--json", action="store_true")
     p.add_argument("--selftest", action="store_true")
 
@@ -390,6 +392,9 @@ def main(argv=None) -> int:
     if args.cmd == "alerts":
         if args.selftest:
             alerts.selftest(CONFIG)
+            return 0
+        if args.rss:
+            sys.stdout.write(alerts.to_rss(alerts.feed(cfg=CONFIG)))
             return 0
         found = alerts.find(args.days, CONFIG, record=not args.dry_run)
         if args.json:

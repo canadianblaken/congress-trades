@@ -184,6 +184,21 @@ Filings land on weekdays; member biographies barely change. A reasonable split:
 `--rotate N` re-checks the N least-recently-updated members, so a daily run cycles
 the whole roster over about a week while staying well inside Wikipedia's rate limit.
 
+## Alerts feed
+
+Every alert the nightly run records is also kept with its text, reasons and a
+link to the filing, and served as RSS:
+
+```bash
+python -m congress_trades alerts --rss > alerts.xml    # the last 100, newest first
+```
+
+The portal serves the same feed at `/feed.xml` and advertises it in the page
+head, so pointing a feed reader at the portal's address finds it. Over
+Tailscale (see "Reading it from your phone") that gives any phone feed reader
+the alerts without the notification stack. The feed starts empty and fills as
+alerts are recorded; `--dry-run` runs never add to it.
+
 ## Watchlist
 
 Follow members, and tickers you own. Every trade they touch raises an alert at
