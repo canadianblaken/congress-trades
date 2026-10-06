@@ -16,7 +16,7 @@ const GROUPS=[['performance','Performance'],['accountability','Accountability'],
   ['briefings','Briefings & data']];
 function nav(){
   const cur=location.hash.replace(/^#\//,'');
-  const tab=(h,t,b)=>`<a href="#/${h}" data-tip="${esc(b)}" aria-description="${esc(b)}"${
+  const tab=(h,t,b)=>`<a href="#/${h}" data-tip="${esc(b)}" data-guide="${esc(h)}" aria-description="${esc(b)}"${
     h===cur?' aria-current="page"':''}>${esc(t)}</a>`;
   const prim=PRIMARY.filter(h=>!(READ_ONLY&&h==='watch')).map(h=>tab(h,TABS[h].title,TABS[h].blurb));
   const inMenu=cur.startsWith('r/')||cur==='page';
@@ -34,8 +34,19 @@ function nav(){
 // The menu closes on any click outside it, and on choosing a report.
 document.addEventListener('click',e=>{ document.querySelectorAll('details.menu[open]').forEach(d=>{
   if(!d.contains(e.target)||e.target.closest('a')) d.removeAttribute('open'); }); });
+// Noob mode: plain-language guides on hover, and a guide chip atop every page that
+// has one. Remembered per browser, like the theme.
+const NOOB_KEY='congress-trades-noob';
+let NOOB=false; try{ NOOB=localStorage.getItem(NOOB_KEY)==='1'; }catch(e){}
+function guidebar(cur){
+  const g=$('#guidebar'); if(!g) return;
+  const key=cur.startsWith('r/')||TABS[cur]?cur:'';
+  g.innerHTML=NOOB&&GUIDES[key]?`<span class="guide-chip" tabindex="0" data-guide="${esc(key)}">
+    How to use this ${cur.startsWith('r/')?'report':'page'}</span>`:'';
+}
 async function route(){
   nav();
+  guidebar(location.hash.replace(/^#\//,''));
   // The panel is fixed-position, so it would otherwise hang over the next view.
   document.querySelectorAll('.panel').forEach(p=>p.remove());
   const cur=location.hash.replace(/^#\//,'');
@@ -67,7 +78,7 @@ async function overview(){
     `<div class="stat"><b>${(s[k]||0).toLocaleString()}</b><span>${l}</span></div>`).join('')
     +(s.latest?`<div class="stat"><b>${esc(s.latest)}</b><span>latest disclosure</span></div>`:'');
   const cards=Object.entries(REPORTS).map(([k,v])=>
-    `<a class="card" href="#/r/${k}"><b>${esc(v.title)}</b><span>${esc(v.blurb)}</span></a>`).join('');
+    `<a class="card" href="#/r/${k}" data-guide="r/${k}"><b>${esc(v.title)}</b><span>${esc(v.blurb)}</span></a>`).join('');
   app.innerHTML=`<div class="stats">${tiles}</div>${persistenceCallout(s.persistence)}
     <div class="chartbox"><h2>Recent activity</h2>
       <p class="cap">Disclosures per month over the last two years: buys above the line, sells below.
@@ -395,14 +406,21 @@ async function member(name){
 const tipbox=(()=>{const d=document.createElement('div'); d.id='tipbox';
   document.body.appendChild(d); return d;})();
 let tiphide=null;
-// A glossary term (data-g) or anything carrying its own text (data-tip: the tabs).
+// A glossary term (data-g), anything carrying its own text (data-tip: the tabs),
+// or, in noob mode, a report or tab's full guide (data-guide).
 function showTip(el){
-  const k=el.dataset.g||el.textContent.trim(), txt=el.dataset.g?GLOSS[k]:el.dataset.tip;
-  if(!txt) return;
+  const g=NOOB&&el.dataset.guide!=null&&GUIDES[el.dataset.guide];
+  const k=el.dataset.g||(el.dataset.guide!=null&&(TABS[el.dataset.guide]||
+    REPORTS[el.dataset.guide.slice(2)]||{}).title)||el.textContent.trim();
+  const txt=el.dataset.g?GLOSS[k]:el.dataset.tip;
+  if(!g&&!txt) return;
   clearTimeout(tiphide);
-  tipbox.innerHTML=`<b>${esc(k)}</b>${esc(txt)}`;
+  tipbox.innerHTML=g?`<b>${esc(k)}</b><dl class="guide">${[['What it shows',g.what],
+      ['Why it is useful',g.why],['What you could do with it',g.use],['Watch out for',g.careful]]
+      .map(([h,v])=>`<dt>${h}</dt><dd>${esc(v)}</dd>`).join('')}</dl>`
+    :`<b>${esc(k)}</b>${esc(txt)}`;
   tipbox.classList.add('on');
-  const r=el.getBoundingClientRect(), w=Math.min(330,innerWidth-24);
+  const r=el.getBoundingClientRect(), w=Math.min(g?420:330,innerWidth-24);
   tipbox.style.width=w+'px';
   const bh=tipbox.offsetHeight;
   let top=r.bottom+8; if(top+bh>innerHeight-8) top=Math.max(8,r.top-bh-8);
@@ -447,7 +465,7 @@ function annotate(root){
       node.parentNode.replaceChild(out,node); }
   });
 }
-const TIPPED='.gloss,[data-tip]';
+const TIPPED='.gloss,[data-tip],[data-guide]';
 document.addEventListener('mouseover',e=>{
   const g=e.target.closest&&e.target.closest(TIPPED); if(g) showTip(g);});
 document.addEventListener('mouseout',e=>{
@@ -977,4 +995,9 @@ $('#st').onclick=async()=>{
 // Hidden rather than removed: tick() and the handlers above still address them.
 if(READ_ONLY) ['#rf','#st'].forEach(s=>$(s).hidden=true);
 wireThemeToggle($('#theme'));
+(()=>{ const b=$('#noob'); if(!b) return;
+  const draw=()=>{ b.setAttribute('aria-pressed',NOOB); b.classList.toggle('on',NOOB); };
+  draw();
+  b.onclick=()=>{ NOOB=!NOOB; try{ localStorage.setItem(NOOB_KEY,NOOB?'1':'0'); }catch(e){}
+    draw(); guidebar(location.hash.replace(/^#\//,'')); }; })();
 statline(); route(); tick();

@@ -13,11 +13,14 @@
     <span class="live" id="live"></span><span class="note" id="stat"></span>
     <button class="ghost" id="rf">Refresh data</button>
     <button class="ghost" id="st">Stop portal</button>
+    <button class="theme-toggle" id="noob" aria-pressed="false"
+      data-tip="Turns on plain-language guides: hover any report, tab or card to learn what it shows, why it is useful, what you could do with it, and what to watch out for.">Noob mode</button>
     <button class="theme-toggle" id="theme"></button>
   </div>
 </header>
 <nav class="nav" id="nav"></nav>
+<div id="guidebar"></div>
 <div class="app" id="app"><div class="spin">loading...</div></div>
-<script>const REPORTS=__REPORTS__, TABS=__TABS__, READ_ONLY=__READ_ONLY__;</script>
+<script>const REPORTS=__REPORTS__, TABS=__TABS__, READ_ONLY=__READ_ONLY__, GUIDES=__GUIDES__;</script>
 <script src="/static/portal.js"></script>
 </body></html>

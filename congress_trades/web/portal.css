@@ -35,6 +35,19 @@ button.ghost:hover:not(:disabled) { color:var(--heading); background:var(--raise
 .nav summary::after { content:"\25BE"; margin-left:.35rem; font-size:.8em; color:var(--ink-3); }
 .nav .here { font-weight:400; color:var(--ink-2); }
 .nav-gap { flex:1; }
+/* Noob mode */
+.theme-toggle.on { color:var(--heading); border-color:var(--warn);
+  background:color-mix(in srgb, var(--warn) 14%, transparent); }
+.guide-chip { display:inline-block; margin:0 0 .9rem; padding:.3rem .7rem; font-size:13px;
+  border-radius:999px; cursor:help; color:var(--heading);
+  border:1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  background:color-mix(in srgb, var(--warn) 10%, transparent); }
+.guide-chip::before { content:"?"; display:inline-block; width:1.15em; height:1.15em;
+  line-height:1.15em; text-align:center; border-radius:50%; margin-right:.4rem;
+  font-weight:700; font-size:.85em; background:var(--warn); color:var(--panel); }
+#tipbox dl.guide { margin:.3rem 0 0; } #tipbox dl.guide dt { font-weight:600;
+  color:var(--heading); font-size:11.5px; text-transform:uppercase; letter-spacing:.04em;
+  margin:.5rem 0 .1rem; } #tipbox dl.guide dd { margin:0; }
 .fbox > summary { cursor:pointer; color:var(--ink-2); font-size:13.5px; margin:0 0 .6rem;
   list-style:none; } .fbox > summary::-webkit-details-marker { display:none; }
 .fbox > summary::before { content:"\25B8\00A0"; } .fbox[open] > summary::before { content:"\25BE\00A0"; }

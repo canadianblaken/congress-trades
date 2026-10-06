@@ -32,6 +32,15 @@ if not CONFIG.db_path.exists():
     print("skip: no database yet")
     sys.exit(0)
 
+# Noob mode: every report and tab has a complete plain-language guide.
+from congress_trades.portal.guide import GUIDES  # noqa: E402
+from congress_trades.portal.jobs import REPORTS as _R  # noqa: E402
+from congress_trades.portal.pages import TABS as _T  # noqa: E402
+_need = {f"r/{k}" for k in _R} | set(_T)
+assert _need <= set(GUIDES), f"no noob guide for {sorted(_need - set(GUIDES))}"
+assert all(set(GUIDES[k]) == {"what", "why", "use", "careful"} and all(GUIDES[k].values())
+           for k in _need), "a guide is missing a part"
+
 httpd = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
 threading.Thread(target=httpd.serve_forever, daemon=True).start()
 BASE = f"http://127.0.0.1:{httpd.server_address[1]}"

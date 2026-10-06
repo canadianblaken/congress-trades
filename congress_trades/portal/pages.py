@@ -307,6 +307,8 @@ def report_page(name: str, q: dict) -> str:
 # filter over a baked payload, so nothing here goes stale between refreshes and
 # the whole database stays reachable without reloading.
 
+from .guide import GUIDES
+
 _app: dict[bool, bytes] = {}
 
 
@@ -322,7 +324,8 @@ def app_html() -> bytes:
                                                         v.get("defaults", {}).items()}}
                                        for k, v in REPORTS.items()})).replace(
             "__TABS__", json.dumps({k: {"title": t, "blurb": b} for k, (t, b) in TABS.items()})
-        ).replace("__READ_ONLY__", json.dumps(ro)).encode("utf-8")
+        ).replace("__READ_ONLY__", json.dumps(ro)).replace(
+            "__GUIDES__", json.dumps(GUIDES)).encode("utf-8")
     return _app[ro]
 # Served at /static/<name>. A fixed list, so a URL can never name another file.
 STATIC = {"portal.css": "text/css; charset=utf-8",
