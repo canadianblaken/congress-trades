@@ -169,6 +169,7 @@ def render(cfg=CONFIG) -> int:
     page = TEMPLATE.replace("__DATA__", json.dumps(payload, separators=(",", ":")))
     page = page.replace("__STATS__", json.dumps(stats))
     page = page.replace("__DEFAULT_FLOOR__", str(cfg.default_floor))
+    page = page.replace("__LATE_DAYS__", str(compliance.STATUTORY_DAYS))
     page = page.replace("__GENERATED__", html.escape(
         dt.datetime.now().strftime("%Y-%m-%d %H:%M")))
     cfg.out_html.parent.mkdir(parents=True, exist_ok=True)
@@ -654,7 +655,7 @@ function unityLine(m) {
       119th Congress${m.nom != null ? ` · DW-NOMINATE ${m.nom > 0 ? "+" : ""}${m.nom.toFixed(2)}` : ""}</span></p>`;
 }
 
-const LATE_DAYS = 45;
+const LATE_DAYS = __LATE_DAYS__;      // compliance.STATUTORY_DAYS, set at publish
 const DAY = 864e5;
 
 function lagStats(rows) {

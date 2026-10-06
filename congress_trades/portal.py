@@ -45,7 +45,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, quote
 
-from . import annual, db, prices
+from . import annual, db, prices, scorecard
 from .config import CONFIG
 
 HOST = "127.0.0.1"
@@ -787,12 +787,16 @@ def report_page(name: str, q: dict) -> str:
 
 SORTS = {"date": "COALESCE(NULLIF(t.disclosed,''), t.tx_date)", "tx": "t.tx_date",
          "member": "t.member", "ticker": "t.ticker", "amount": "t.amount_min",
-         "ret": "r.ret_90", "alpha": "(r.ret_90 - r.bench_90)"}
+         "ret": "r.ret_90", "alpha": "alpha(t.tx_type, r.ret_90, r.bench_90)"}
 
 
 def _ro():
     conn = sqlite3.connect(f"file:{CONFIG.db_path}?mode=ro", uri=True, timeout=5)
     conn.row_factory = sqlite3.Row
+    # The one definition of "did this trade work", callable from SQL. Every query
+    # here uses it instead of spelling the formula out: the copies this replaced
+    # had drifted -- sorting ignored a sell's direction, and exchanges scored as buys.
+    conn.create_function("alpha", 3, scorecard.alpha, deterministic=True)
     return conn
 
 
@@ -852,11 +856,7 @@ def api_trades(q: dict) -> dict:
     except sqlite3.Error as e:
         return {"rows": [], "total": 0, "error": str(e)}
     for r in out:
-        if r["ret_90"] is not None and r["bench_90"] is not None:
-            a = r["ret_90"] - r["bench_90"]
-            r["alpha"] = -a if (r["tx_type"] or "").lower().startswith("s") else a
-        else:
-            r["alpha"] = None
+        r["alpha"] = scorecard.alpha(r["tx_type"], r["ret_90"], r["bench_90"])
     return {"rows": out, "total": total, "limit": limit, "offset": offset}
 
 
@@ -983,10 +983,9 @@ def api_ticker(sym: str, q: dict) -> dict:
                 LIMIT 1""", (sym,)).fetchone()
         # Median, not mean, to match how the scorecard reports a record.
         alphas = [r[0] for r in conn.execute(
-            """SELECT CASE WHEN LOWER(t.tx_type) LIKE 's%'
-                           THEN r.bench_90 - r.ret_90 ELSE r.ret_90 - r.bench_90 END
+            """SELECT alpha(t.tx_type, r.ret_90, r.bench_90)
                  FROM congress_trades t JOIN trade_returns r ON r.trade_id = t.id
-                WHERE t.ticker = ? AND r.ret_90 IS NOT NULL AND r.bench_90 IS NOT NULL""",
+                WHERE t.ticker = ?""",
             (sym,)).fetchall() if r[0] is not None]
         members = [dict(r) for r in conn.execute(
             """SELECT t.member, COALESCE(m.full_name,'') full_name,
@@ -1032,10 +1031,7 @@ def api_ticker(sym: str, q: dict) -> dict:
         k = len(alphas)
         med = alphas[k // 2] if k % 2 else (alphas[k // 2 - 1] + alphas[k // 2]) / 2
     for r in recent:
-        r["alpha"] = (None if r["ret_90"] is None or r["bench_90"] is None else
-                      (r["bench_90"] - r["ret_90"]
-                       if (r["tx_type"] or "").lower().startswith("s")
-                       else r["ret_90"] - r["bench_90"]))
+        r["alpha"] = scorecard.alpha(r["tx_type"], r["ret_90"], r["bench_90"])
     return {"ticker": sym, "asset_name": name["asset_name"] if name else "",
             "sector": sector["sector"] if sector else "", "agg": a,
             "alpha_med": med, "alpha_n": len(alphas),
@@ -1061,13 +1057,8 @@ def api_member(name: str) -> dict:
                       SUM(CASE WHEN LOWER(t.tx_type) LIKE 'b%' THEN 1 ELSE 0 END) buys,
                       SUM(CASE WHEN LOWER(t.tx_type) LIKE 's%' THEN 1 ELSE 0 END) sells,
                       SUM(t.amount_min) vol,
-                      AVG(CASE WHEN r.ret_90 IS NOT NULL AND r.bench_90 IS NOT NULL
-                          THEN (CASE WHEN LOWER(t.tx_type) LIKE 's%'
-                                THEN r.bench_90 - r.ret_90 ELSE r.ret_90 - r.bench_90 END)
-                          END) alpha,
                       AVG(JULIANDAY(t.disclosed) - JULIANDAY(t.tx_date)) lag
-                 FROM congress_trades t LEFT JOIN trade_returns r ON r.trade_id=t.id
-                WHERE t.member = ?""", (name,)).fetchone()
+                 FROM congress_trades t WHERE t.member = ?""", (name,)).fetchone()
         prof["agg"] = dict(agg) if agg else {}
         prof["top"] = [dict(r) for r in conn.execute(
             """SELECT ticker, COUNT(*) n,
@@ -1081,6 +1072,7 @@ def api_member(name: str) -> dict:
         conn.close()
         prof["compliance"] = _member_compliance(name)
         prof["finance"] = _member_finance(prof.get("bioguide"))
+        prof["score"] = _member_score(name)
         return prof
     except sqlite3.Error as e:
         return {"error": str(e)}
@@ -1110,6 +1102,20 @@ def _member_compliance(name: str) -> dict | None:
     m = ((d or {}).get("members") or {}).get(name)
     return {k: m.get(k) for k in ("total_trades", "late_count", "late_share",
                                   "worst_lag", "median_late_lag")} if m else None
+
+
+def _member_score(name: str) -> dict:
+    """The scoreboard's own figures for this member, or why there are none. The
+    panel used to average alpha itself -- a mean over every trade, where the
+    scoreboard takes a median over closed windows above the default floor -- and
+    the two could disagree in sign for the same person."""
+    d = _cached("scorecard", lambda: {m["member"]: m for m in scorecard.members(
+        CONFIG.default_floor, "90", cfg=CONFIG)}) or {}
+    m = d.get(name)
+    if not m:
+        return {"min": scorecard.MIN_TRADES}
+    o = m["overall"]
+    return {"med": o["med"], "smed": o["smed"], "beat": o["beat"], "n": o["n"]}
 
 
 def _member_finance(bioguide: str | None) -> dict | None:
@@ -1916,7 +1922,12 @@ async function member(name){
       <b>disclosures</b><span>${(a.n||0).toLocaleString()}</span>
       <b>buys / sells</b><span>${a.buys||0} / ${a.sells||0}</span>
       <b>disclosed volume</b><span>at least $${(a.vol||0).toLocaleString()}</span>
-      <b>mean alpha</b><span class="${a.alpha>0?'':''}">${a.alpha==null?'not priced yet':pct(a.alpha)}</span>
+      ${d.score&&d.score.n!=null
+        ?`<b>alpha vs index</b><span>${pct(d.score.med)} median over ${d.score.n} scored trades</span>
+          <b>vs sector</b><span>${pct(d.score.smed)}</span>
+          <b>beat index</b><span>${Math.round(100*d.score.beat)}% of trades</span>`
+        :`<b>alpha</b><span>not scored: fewer than ${d.score?d.score.min:10} measurable
+          trades above the default floor</span>`}
       <b>mean filing lag</b><span>${a.lag==null?'-':Math.round(a.lag)+' days'}</span>
       ${d.party_unity!=null?`<b>party unity</b><span>${(d.party_unity).toFixed(0)}%</span>`:''}
       ${d.nominate!=null?`<b>DW-NOMINATE</b><span>${d.nominate.toFixed(2)}</span>`:''}
