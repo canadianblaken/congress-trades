@@ -6,6 +6,7 @@
 #   ./run.sh -v all               flags work too; -v goes BEFORE the subcommand
 #   ./run.sh portal               live portal at http://127.0.0.1:8777
 #   ./run.sh portal stop          stop a running portal (or use its Stop button)
+#   ./run.sh test                 every test and selftest (selftests use a DB copy)
 #
 # The model-backed commands, which need CONGRESS_LLM_PROVIDER and a model set in
 # .env (see .env.example), and are never part of `all` because they cost time and
@@ -174,6 +175,11 @@ open_page() {
 if [ "${1:-}" = "portal" ]; then
   shift
   exec "$PY" -m congress_trades.portal "$@"
+fi
+
+# Every test and every module selftest; selftests run on a copy of the database.
+if [ "${1:-}" = "test" ]; then
+  exec "$PY" "$HERE/tests/run_all.py"
 fi
 
 # No arguments means the everyday case: bring the data current, then look at it.
