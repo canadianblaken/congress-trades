@@ -76,6 +76,8 @@ button.ghost:hover:not(:disabled) { color:var(--heading); background:var(--raise
   .menu-list { position:fixed; left:.6rem; right:.6rem; top:auto; min-width:0;
     grid-template-columns:1fr; max-height:70vh; overflow-y:auto; }
   .top-right .note { display:none; }
+  /* Refresh and Stop live on Maintenance too; keep the phone header to one row. */
+  #st, #rf { display:none; }
   /* Explore's rows become cards: member and direction, then what and how much,
      then when and how it did. Columns: 1 date 2 member 3 ticker 4 asset 5 type
      6 amount 7 90d return 8 alpha. */

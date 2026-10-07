@@ -114,8 +114,9 @@ async function drawActivity(){
   const d=await (await fetch('/api/timeline?days=730')).json();
   if(!d.rows||!d.rows.length){ const w=$('#w-act');
     if(w) w.innerHTML='<div class="nochart">Nothing to plot yet.</div>'; return; }
-  const r=d.rows;
-  $('#w-act').style.height='250px';
+  const r=d.rows, w=$('#w-act');
+  if(!w) return;                  // the reader moved on before the data arrived
+  w.style.height='250px';
   monthBars('c-act',r,r.map(x=>x.buys),r.map(x=>x.sells),v=>v.toLocaleString(),
     {click:clickMonth(r,d.since)});
 }
@@ -151,7 +152,9 @@ function monthBars(id,r,buy,sell,fmt,extra){
 // window's own cut, because the first month plotted is usually partial.
 function openMonth(ym,sell,since,extra){
   Object.assign(st,{q:'',member:'',ticker:'',chamber:'',floor:'',tickered:'0',watched:'0',
-    type:sell?'sell':'buy',since:[ym+'-01',since||''].sort()[1],until:ym+'-31',
+    type:sell?'sell':'buy',since:[ym+'-01',since||''].sort()[1],
+    // the month's real last day: a date picker cannot show "2026-09-31"
+    until:`${ym}-${String(new Date(+ym.slice(0,4),+ym.slice(5,7),0).getDate()).padStart(2,'0')}`,
     sort:'date',dir:'desc',offset:0},extra||{});
   if(location.hash!=='#/explore') location.hash='#/explore'; else explore();
 }
@@ -186,9 +189,9 @@ async function explore(){
       ['','House','Senate'].map(c=>`<option value="${c}"${st.chamber===c?' selected':''}>${c||'both'}</option>`).join('')}</select></div>
     <div><label>type</label><select id="f-type">${
       ['','buy','sell'].map(c=>`<option value="${c}"${st.type===c?' selected':''}>${c||'any'}</option>`).join('')}</select></div>
-    <div><label>min amount</label><input id="f-floor" inputmode="numeric" placeholder="15001" value="${esc(st.floor)}"></div>
-    <div><label>since</label><input id="f-since" placeholder="2025-01-01" value="${esc(st.since)}"></div>
-    <div><label>until</label><input id="f-until" placeholder="2025-12-31" value="${esc(st.until)}"></div>
+    <div><label>min amount</label><input id="f-floor" inputmode="numeric" placeholder="any" value="${esc(st.floor)}"></div>
+    <div><label>since</label><input id="f-since" type="date" value="${esc(st.since)}"></div>
+    <div><label>until</label><input id="f-until" type="date" value="${esc(st.until)}"></div>
     <div class="chk"><input type="checkbox" id="f-tickered"${st.tickered==='1'?' checked':''}>
       <label style="margin:0;text-transform:none;font-size:13px">tickered only</label></div>
     ${READ_ONLY?'':`<div class="chk"><input type="checkbox" id="f-watched"${st.watched==='1'?' checked':''}>
@@ -538,7 +541,7 @@ async function trends(){
       `<option value="${v}"${tstate.days===v?' selected':''}>${l}</option>`).join('')}</select></div>
     <div><label>chamber</label><select id="t-chamber">${
       ['','House','Senate'].map(c=>`<option value="${c}"${tstate.chamber===c?' selected':''}>${c||'both'}</option>`).join('')}</select></div>
-    <div><label>min amount</label><input id="t-floor" inputmode="numeric" placeholder="15001" value="${esc(tstate.floor)}"></div>
+    <div><label>min amount</label><input id="t-floor" inputmode="numeric" placeholder="any" value="${esc(tstate.floor)}"></div>
   </div>
   <div class="chartbox">
     <h2>Top names</h2>
@@ -583,6 +586,7 @@ function qwin(extra){ return new URLSearchParams(Object.assign(
 
 async function drawTop(){
   const d=await (await fetch('/api/top?'+qwin({metric:tstate.metric,limit:'18'}))).json();
+  if(!$('#w-top')||!$('#w-time')) return;   // the reader left Trends before the data arrived
   const cap=$('#t-cap'), box=$('#t-table');
   if(d.error||!d.rows||!d.rows.length){
     if(cap) cap.textContent='Nothing in this window.';
@@ -639,6 +643,7 @@ async function drawTop(){
 async function drawTime(){
   const d=await (await fetch('/api/timeline?'+qwin())).json();
   const box=$('#t-time-table');
+  if(!$('#w-top')||!$('#w-time')) return;   // the reader left Trends before the data arrived
   if(d.error||!d.rows||!d.rows.length){
     $('#w-time').innerHTML='<div class="nochart">No matching trades.</div>';
     if(box) box.innerHTML=''; return; }
@@ -758,7 +763,7 @@ async function watchPage(){
       <th class="num">trades, 90 days</th><th></th></tr></thead><tbody>${w[kind].map(x=>`<tr>
       <td>${kind==='ticker'?`<b class="mlink" data-t="${esc(x.value)}">${esc(x.value)}</b>`
         :`<span class="mlink" data-m="${esc(x.value)}">${esc(x.value)}</span>`}</td>
-      <td>${esc(x.name)}</td><td class="num">${x.n90}</td>
+      <td>${x.name&&x.name!==x.value?esc(x.name):''}</td><td class="num">${x.n90}</td>
       <td><button data-rm-kind="${kind}" data-rm="${esc(x.value)}">remove</button></td></tr>`).join('')}
       </tbody></table></div>`:'<p class="note">Nothing yet.</p>'}</div>`;
   app.innerHTML=`<div class="chartbox"><h2>Add to your watchlist</h2>
