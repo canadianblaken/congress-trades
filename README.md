@@ -1,42 +1,96 @@
 # congress-trades
 
 US congressional stock-trade disclosures, collected from the primary sources and
-rendered as a single self-contained HTML page.
+turned into something you can actually read: a local web portal, a shareable
+one-file page, alerts, and honest statistics about whether any of it means
+anything.
 
 No API keys. No paid data feed. Just the government's own filings, parsed --
-plus an optional `digest`/`advise` pair that hands the result to an LLM of your
-choosing, with the limits of this data spelled out in the prompt.
+plus optional AI-written briefs on whichever model you choose, with the limits of
+this data spelled out in the prompt.
 
-![status](https://img.shields.io/badge/data-public%20domain-blue) ![python](https://img.shields.io/badge/python-3.10%2B-blue)
+![status](https://img.shields.io/badge/data-public%20domain-blue) ![python](https://img.shields.io/badge/python-3.10%2B-blue) ![license](https://img.shields.io/badge/license-MIT-green)
+
+![The portal's Overview: headline numbers, the persistence caveat, monthly buying above the line and selling below, and every report](docs/screenshots/overview.png)
 
 ## What it does
 
 Members of Congress must disclose securities transactions within 45 days under the
 STOCK Act. Those filings are public but awkward to use: the House publishes PDFs
 behind a yearly ZIP index, the Senate hides an HTML table behind a terms-acceptance
-handshake, and neither tells you who the person actually is.
+handshake, and neither tells you who the person actually is. This collects both
+chambers (33,000+ trades), resolves each filer to a real legislator, and
+prices every trade against the market from the day it became public.
 
-This collects both chambers, resolves each filer to a real legislator, and produces
-one page you can open in a browser:
+**Explore and follow**
+- **Portal** (`./run.sh portal`) -- Overview, Trends, Explore and Watchlist, with
+  every report one menu away. Click any month in a chart to list exactly those
+  buys or sells; click any member or stock for their full record.
+- **Watchlist** -- follow members, and the tickers you own. Any trade they touch
+  raises an alert at any size and leads the daily digest.
+- **Alerts and an RSS feed** -- only what crossed a bar: very large, unusual for
+  that member, in their own committee's sector, several members converging, or on
+  your watchlist. Each alert links to the filing.
+- **A one-file page** (`out/congress.html`) -- members, movers and a scoreboard,
+  fully inlined, to save or send to anyone.
 
-- **Member view** — click a person for their photo, bio, party, seat, committee
-  assignments, filing-lag record, party-unity score, and every trade they disclosed.
-  A **Beyond trades** block adds their late-filing record, PAC money from the
-  sectors their committees oversee, and annual-report debts, income and positions.
-  Click a bar in their monthly chart to list just that month's buys or sells.
-- **Movers view** — an activity chart whose bars list that month's trades, net
-  buying by industry, the names the most members converged on, and the *lone large
-  positions* a single member took that nobody else touched.
-- **Scoreboard view** — every member ranked by how their disclosed trades actually
-  turned out against the index, buys and sells both, with their best and worst call
-  spelled out, each record split into halves, and a warning on any member whose
-  alpha is really one concentrated bet.
-- **Filters** — chamber, time window, and a disclosure-size floor, applied live.
+**Is it skill?**
+- **Scoreboard** -- every member ranked by alpha against the index *and* against
+  their own sector, from the disclosure date, buys and sells both.
+- **Backtest, filing lag, committee timing** -- out-of-sample tests with
+  month-clustered error bars. The headline is a negative one, shown wherever
+  rankings are: **past records have not predicted future ones** (r ≈ -0.08).
 
-Everything is inlined into the output file. There is no server and no API.
+**Accountability**
+- **Flags** -- per member, side by side: late filings, trades in sectors their own
+  committees oversee, PAC money from those sectors, and large bets no other member
+  made. Facts, deliberately not a score.
+- **Compliance, PAC money, Lobbying, Annual reports, Judges** -- the other public
+  disclosure streams, joined to the same members.
 
-There is also a **local portal** (`./run.sh portal`) that serves every report the
-CLI can print, plus a Maintenance tab for the jobs that collect and write.
+**Careful with the data**
+- Senate amendments replace the reports they amend, and trades re-reported in a
+  later filing are counted once, at the date they first became public.
+- Options are listed but never scored as share trades (a bought put is a bearish
+  bet). One definition of alpha is used everywhere.
+- Optional model passes label unknown assets and audit the parser, but a model
+  only proposes: a ticker reaches the trades table only after four independent
+  checks.
+
+**Built for people**
+- Light and dark themes. Buy/sell, party and the sign of a return each have their
+  own visual channel, and the buy/sell colours are validated for colour-blind readers.
+- **Noob mode** -- plain-language guides on every report: what it shows, why it is
+  useful, what you could do with it, and what to watch out for.
+- Works on a phone, on every computer on your network, read-only for sharing, and
+  as an MCP server for AI agents.
+
+## Screenshots
+
+| | |
+|---|---|
+| ![Trends: top names by net flow, and buying vs selling per month](docs/screenshots/trends.png) **Trends** -- which names Congress is buying or selling, and month by month. | ![Explore: every disclosure, filterable, with BUY/SELL tags and party-coloured names](docs/screenshots/explore.png) **Explore** -- all 33,000+ trades, filter and sort live. |
+| ![A member panel over Explore: record, scoreboard figures, beyond-trades facts and most-traded names](docs/screenshots/explore-member.png) **Member panel** -- the scoreboard's figures, late filings, PAC money and most-traded names. | ![The Reports menu grouped into Performance, Accountability and Briefings, over the Scoreboard](docs/screenshots/reports-menu.png) **Reports** -- fifteen, grouped; here the Scoreboard. |
+| ![Noob mode: hovering a report shows what it shows, why it is useful, what to do with it, and what to watch out for](docs/screenshots/noob-mode.png) **Noob mode** -- every report explains itself. | ![Flags: late filings, committee-sector trades, PAC money and lone bets per member](docs/screenshots/flags.png) **Flags** -- the accountability facts, side by side. |
+| ![The Scoreboard in dark mode, with the persistence caveat](docs/screenshots/scoreboard-dark.png) **Dark mode** -- returns carry a mark, never a party colour. | ![Watchlist with example entries](docs/screenshots/watchlist.png) **Watchlist** -- example entries; yours stays on your machine. |
+| ![Maintenance: model picker, prerequisites and jobs](docs/screenshots/maintenance.png) **Maintenance** -- pick the AI model, refresh, run jobs. | ![The one-file static page, member view](docs/screenshots/static-page.png) **One-file page** -- the shareable snapshot. |
+
+<p align="center">
+  <img src="docs/screenshots/phone-overview-dark.png" width="260" alt="The Overview on a phone, dark mode">
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/phone-explore.png" width="260" alt="Explore on a phone: each trade a three-line card">
+</p>
+
+## Quick start
+
+```bash
+git clone https://github.com/canadianblaken/congress-trades.git
+cd congress-trades
+pip install -r requirements.txt        # one dependency; also needs pdftotext (see Install)
+echo "CONGRESS_CONTACT=you@example.com" > .env   # sec.gov refuses anonymous clients
+./run.sh                               # collect, price and render (slow the first time)
+./run.sh portal                        # http://127.0.0.1:8777
+```
 
 ## Data sources
 
@@ -88,7 +142,7 @@ congress_trades resolve` still overrides it for one run.
 ## Install
 
 ```bash
-git clone <your-fork-url> congress-trades
+git clone https://github.com/canadianblaken/congress-trades.git
 cd congress-trades
 pip install -r requirements.txt
 ```
